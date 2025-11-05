@@ -1,0 +1,18 @@
+# Clockify Support CLI v4.0 with DeepSeek Integration
+# Production dependencies (pinned versions)
+
+# HTTP client and networking
+requests==2.32.5
+urllib3==2.2.3
+
+# Numerical computing and data structures
+numpy==2.3.4
+
+# Embeddings model (local, no external API)
+sentence-transformers==3.3.1
+torch==2.4.2
+
+# Optional: for development/testing
+# pytest==7.4.4
+# black==24.1.1
+# pylint==3.0.3

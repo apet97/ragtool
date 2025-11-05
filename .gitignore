@@ -1,0 +1,31 @@
+# Knowledge base artifacts (generated, not versioned)
+chunks.jsonl
+vecs_n.npy
+vecs.npy
+meta.jsonl
+bm25.json
+index.meta.json
+
+# Build artifacts
+.build.lock
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+
+# Process files
+.shim.pid
+shim.log
+
+# Environment
+.env
+.venv
+venv/
+*.bak
+
+# OS
+.DS_Store
+.swp
+.swo
+*~
