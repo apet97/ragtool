@@ -311,7 +311,7 @@ activate_env() {
 }
 
 check_ollama() {
-    timeout 2 python3 -c "import requests; requests.post('http://10.127.0.192:11434/api/tags')" 2>/dev/null || {
+    timeout 2 python3 -c "import requests; requests.post('http://127.0.0.1:11434/api/tags')" 2>/dev/null || {
         echo "ERROR: Ollama not running"
         echo "Start with: ollama serve"
         exit 1
@@ -473,7 +473,7 @@ If tests fail:
 5. Consult README_RAG.md for detailed explanations
 
 For persistent issues:
-- Verify Ollama is accessible: `curl http://10.127.0.192:11434/api/tags`
+- Verify Ollama is accessible: `curl http://127.0.0.1:11434/api/tags`
 - Check model availability: `ollama list`
 - Review Ollama logs for errors
 - Test with smaller knowledge base if available
