@@ -1241,8 +1241,15 @@ def build(md_path: str, retries=0):
         # Task E: Write chunks atomically
         atomic_write_jsonl(FILES["chunks"], chunks)
 
-        logger.info("\n[2/4] Embedding with Ollama...")
-        vecs = embed_texts([c["text"] for c in chunks], retries=retries)
+        logger.info(f"\n[2/4] Embedding with {EMB_BACKEND}...")
+        if EMB_BACKEND == "local":
+            # v4.1: Use local SentenceTransformer embeddings
+            logger.info(f"  Using local embeddings (backend={EMB_BACKEND})...")
+            vecs = embed_local_batch([c["text"] for c in chunks], normalize=False)
+        else:
+            # Fallback to remote Ollama embeddings
+            vecs = embed_texts([c["text"] for c in chunks], retries=retries)
+
         # Pre-normalize for efficient retrieval, Task H: ensure float32
         norms = np.linalg.norm(vecs, axis=1, keepdims=True)
         norms[norms == 0] = 1e-9
@@ -1266,6 +1273,19 @@ def build(md_path: str, retries=0):
         # Task E: use atomic_write_json for bm25.json
         atomic_write_json(FILES["bm25"], bm)
         logger.info(f"  Indexed {len(bm['idf'])} unique terms")
+
+        # v4.1: Optional FAISS ANN index if enabled
+        if USE_ANN == "faiss":
+            try:
+                logger.info("\n[3.1/4] Building FAISS ANN index...")
+                faiss_index = build_faiss_index(vecs_n, nlist=ANN_NLIST)
+                if faiss_index is not None:
+                    save_faiss_index(faiss_index, FILES["faiss_index"])
+                    logger.info(f"  Saved FAISS index to {FILES['faiss_index']}")
+                else:
+                    logger.info("  FAISS not available, skipping ANN index")
+            except Exception as e:
+                logger.warning(f"  FAISS index build failed: {e}; continuing without it")
 
         # Optional HNSW fast index (behind env flag) with atomic save + fsync
         if os.getenv("USE_HNSWLIB") == "1":
@@ -1298,12 +1318,14 @@ def build(md_path: str, retries=0):
             "emb_rows": int(vecs_n.shape[0]),
             "bm25_docs": len(bm["doc_lens"]),
             "gen_model": GEN_MODEL,
-            "emb_model": EMB_MODEL,
+            "emb_model": EMB_MODEL if EMB_BACKEND == "ollama" else "all-MiniLM-L6-v2",
+            "emb_backend": EMB_BACKEND,
+            "ann": USE_ANN,
             "mmr_lambda": MMR_LAMBDA,
             "chunk_chars": CHUNK_CHARS,
             "chunk_overlap": CHUNK_OVERLAP,
             "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "code_version": "4.0"
+            "code_version": "4.1"
         }
         # Task E: use atomic_write_json for index.meta.json
         atomic_write_json(FILES["index_meta"], index_meta)
