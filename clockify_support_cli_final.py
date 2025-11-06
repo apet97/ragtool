@@ -2761,19 +2761,82 @@ def answer_once(
 
 # ====== TASK J: SELF-TESTS (7 Tests) ======
 def test_mmr_behavior_ok():
-    """Verify MMR inline logic applies diversification - Task J."""
-    # Synthetic test: create mock vectors and scores where MMR should reorder
-    import inspect
+    """Verify MMR diversification produces diverse selections with rerank enabled."""
 
-    # Verify MMR logic exists in answer_once (inlined)
-    source = inspect.getsource(answer_once)
-    assert "mmr_gain" in source, "MMR gain function not found in answer_once"
-    assert "MMR_LAMBDA" in source, "MMR_LAMBDA not used in answer_once"
-    assert "max(float(vecs_n[j].dot(vecs_n[k]))" in source, "MMR diversity term not found"
+    # Synthetic knowledge base with three chunks – two are similar, one is orthogonal
+    chunks = [
+        {"id": "chunk-0", "title": "Doc A", "section": "S1", "url": "", "text": "Details A"},
+        {"id": "chunk-1", "title": "Doc A", "section": "S1", "url": "", "text": "More A"},
+        {"id": "chunk-2", "title": "Doc B", "section": "S2", "url": "", "text": "Details B"},
+    ]
 
-    # Verify reranking integration
-    assert "rerank_with_llm" in source, "Reranker not called"
-    assert "use_rerank" in source, "use_rerank flag not checked"
+    base_vecs = np.array([
+        [1.0, 0.0],
+        [0.99, 0.0],  # Nearly identical to chunk-0
+        [0.0, 1.0],   # Orthogonal for diversity
+    ], dtype=np.float32)
+    norms = np.linalg.norm(base_vecs, axis=1, keepdims=True)
+    vecs_n = base_vecs / np.where(norms == 0, 1, norms)
+
+    dense_scores = np.array([0.9, 0.85, 0.8], dtype=np.float32)
+    bm25_scores = np.array([0.2, 0.1, 0.05], dtype=np.float32)
+    hybrid_scores = 0.5 * dense_scores + 0.5 * bm25_scores
+
+    # Monkeypatch retrieve/rerank/ask to avoid network dependencies
+    original_retrieve = retrieve
+    original_rerank = rerank_with_llm
+    original_ask = ask_llm
+
+    rerank_probe = {}
+
+    def fake_retrieve(question, chunks_, vecs_n_, bm_, top_k=12, hnsw=None, retries=0):
+        return [0, 1, 2], {
+            "dense": dense_scores,
+            "bm25": bm25_scores,
+            "hybrid": hybrid_scores,
+        }
+
+    def fake_rerank(question, chunks_, selected, scores, seed=DEFAULT_SEED, num_ctx=DEFAULT_NUM_CTX, num_predict=DEFAULT_NUM_PREDICT, retries=0):
+        rerank_probe["mmr_selection"] = list(selected)
+        # Keep original order but record deterministic scores
+        rerank_scores = {idx: float(1.0 - 0.1 * pos) for pos, idx in enumerate(selected)}
+        return list(selected), rerank_scores, True, ""
+
+    def fake_ask_llm(question, snippets_block, seed=DEFAULT_SEED, num_ctx=DEFAULT_NUM_CTX, num_predict=DEFAULT_NUM_PREDICT, retries=0):
+        return json.dumps({"answer": "stub", "confidence": 100})
+
+    try:
+        globals()["retrieve"] = fake_retrieve
+        globals()["rerank_with_llm"] = fake_rerank
+        globals()["ask_llm"] = fake_ask_llm
+
+        answer, metadata = answer_once(
+            "What is covered?",
+            chunks,
+            vecs_n,
+            bm={},
+            top_k=3,
+            pack_top=2,
+            threshold=0.5,
+            use_rerank=True,
+            debug=False,
+            seed=123,
+            num_ctx=128,
+            num_predict=64,
+            retries=0,
+        )
+    finally:
+        globals()["retrieve"] = original_retrieve
+        globals()["rerank_with_llm"] = original_rerank
+        globals()["ask_llm"] = original_ask
+
+    assert answer.strip() == "stub"
+    # Ensure MMR fed reranker with diverse indices (chunk-0 then chunk-2)
+    assert rerank_probe.get("mmr_selection") == [0, 2]
+    # Packed selection should contain two unique chunks, excluding the duplicate chunk-1
+    assert metadata["selected"] == ["chunk-0", "chunk-2"]
+    assert len(set(metadata["selected"])) == 2
+    assert metadata["rerank_applied"] is True
     return True
 
 def test_pack_headroom_enforced():
@@ -2846,15 +2909,97 @@ def test_post_retry_logic():
     return True
 
 def test_rerank_applied_when_enabled():
-    """Verify reranker is called and influences order - Task J."""
-    import inspect
-    source = inspect.getsource(answer_once)
-    # Verify rerank conditional
-    assert "if use_rerank:" in source, "use_rerank conditional not found"
-    # Verify rerank function is called
-    assert "rerank_with_llm" in source, "rerank_with_llm not called"
-    # Verify result overwrites mmr_selected (v4.1: 4-tuple return)
-    assert "mmr_selected" in source and "rerank_with_llm" in source, "Rerank result not assigned to mmr_selected"
+    """Ensure reranking is gated by the use_rerank flag and updates metadata."""
+
+    chunks = [
+        {"id": "chunk-0", "title": "Doc A", "section": "S1", "url": "", "text": "Details A"},
+        {"id": "chunk-1", "title": "Doc B", "section": "S2", "url": "", "text": "Details B"},
+    ]
+    base_vecs = np.array([
+        [1.0, 0.0],
+        [0.0, 1.0],
+    ], dtype=np.float32)
+    vecs_n = base_vecs / np.linalg.norm(base_vecs, axis=1, keepdims=True)
+
+    dense_scores = np.array([0.9, 0.8], dtype=np.float32)
+    bm25_scores = np.array([0.1, 0.05], dtype=np.float32)
+    hybrid_scores = 0.5 * dense_scores + 0.5 * bm25_scores
+
+    original_retrieve = retrieve
+    original_rerank = rerank_with_llm
+    original_ask = ask_llm
+
+    calls = {"true": 0, "false": 0}
+
+    def fake_retrieve(question, chunks_, vecs_n_, bm_, top_k=12, hnsw=None, retries=0):
+        return [0, 1], {
+            "dense": dense_scores,
+            "bm25": bm25_scores,
+            "hybrid": hybrid_scores,
+        }
+
+    def fake_rerank(question, chunks_, selected, scores, seed=DEFAULT_SEED, num_ctx=DEFAULT_NUM_CTX, num_predict=DEFAULT_NUM_PREDICT, retries=0):
+        if "use" in question:
+            calls["true"] += 1
+        else:
+            calls["false"] += 1
+        rerank_scores = {idx: float(1.0 - 0.1 * pos) for pos, idx in enumerate(selected)}
+        return list(reversed(selected)), rerank_scores, True, ""
+
+    def fake_ask_llm(question, snippets_block, seed=DEFAULT_SEED, num_ctx=DEFAULT_NUM_CTX, num_predict=DEFAULT_NUM_PREDICT, retries=0):
+        return json.dumps({"answer": question, "confidence": 90})
+
+    try:
+        globals()["retrieve"] = fake_retrieve
+        globals()["rerank_with_llm"] = fake_rerank
+        globals()["ask_llm"] = fake_ask_llm
+
+        ans_true, meta_true = answer_once(
+            "use rerank please",
+            chunks,
+            vecs_n,
+            bm={},
+            top_k=2,
+            pack_top=2,
+            threshold=0.5,
+            use_rerank=True,
+            debug=False,
+            seed=7,
+            num_ctx=128,
+            num_predict=64,
+            retries=0,
+        )
+
+        ans_false, meta_false = answer_once(
+            "skip rerank",
+            chunks,
+            vecs_n,
+            bm={},
+            top_k=2,
+            pack_top=2,
+            threshold=0.5,
+            use_rerank=False,
+            debug=False,
+            seed=8,
+            num_ctx=128,
+            num_predict=64,
+            retries=0,
+        )
+    finally:
+        globals()["retrieve"] = original_retrieve
+        globals()["rerank_with_llm"] = original_rerank
+        globals()["ask_llm"] = original_ask
+
+    assert ans_true.strip() == "use rerank please"
+    assert ans_false.strip() == "skip rerank"
+    assert meta_true["rerank_applied"] is True
+    assert meta_false["rerank_applied"] is False
+    assert calls["true"] == 1
+    assert calls["false"] == 0
+    # Reranker reversed the order when enabled
+    assert meta_true["selected"] == ["chunk-1", "chunk-0"]
+    # When disabled, MMR order preserved (first chunk stays first)
+    assert meta_false["selected"][0] == "chunk-0"
     return True
 
 def run_selftest():
