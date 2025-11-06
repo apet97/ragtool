@@ -1,4 +1,4 @@
-.PHONY: help venv install selftest build chat smoke clean test eval typecheck lint format pre-commit-install pre-commit-run
+.PHONY: help venv install selftest build chat smoke clean test eval benchmark benchmark-quick typecheck lint format pre-commit-install pre-commit-run
 
 help:
 	@echo "v4.1 Clockify RAG CLI - Make Targets"
@@ -11,6 +11,8 @@ help:
 	@echo "  make smoke               - Run full smoke test suite"
 	@echo "  make test                - Run unit tests with coverage"
 	@echo "  make eval                - Run RAG evaluation on ground truth dataset"
+	@echo "  make benchmark           - Run performance benchmarks (latency, throughput, memory)"
+	@echo "  make benchmark-quick     - Run quick benchmarks (fewer iterations)"
 	@echo "  make typecheck           - Run mypy static type checking"
 	@echo "  make lint                - Run ruff linter"
 	@echo "  make format              - Format code with black"
@@ -69,6 +71,14 @@ test:
 eval:
 	@echo "Running RAG evaluation on ground truth dataset..."
 	python3 eval.py
+
+benchmark:
+	@echo "Running performance benchmarks..."
+	python3 benchmark.py
+
+benchmark-quick:
+	@echo "Running quick benchmarks..."
+	python3 benchmark.py --quick
 
 typecheck:
 	@echo "Running mypy type checking..."
