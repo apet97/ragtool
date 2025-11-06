@@ -40,6 +40,16 @@ jobs:
         python -m pytest tests/ -v --cov=clockify_support_cli_final --cov-report=term-missing --cov-report=xml
       continue-on-error: false  # Fail if tests fail
 
+    - name: Prepare dummy benchmark artifacts
+      run: |
+        python scripts/create_dummy_index.py
+
+    - name: Run quick benchmark smoke test
+      env:
+        BENCHMARK_FAKE_REMOTE: "1"
+      run: |
+        python benchmark.py --quick
+
     - name: Upload coverage reports to Codecov
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
       uses: codecov/codecov-action@v4
