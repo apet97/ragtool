@@ -58,7 +58,7 @@ python3 clockify_support_cli_final.py chat --debug
 python3 clockify_support_cli_final.py ask "How do I track time in Clockify?"
 
 # Run self-tests
-python3 clockify_support_cli_final.py selftest
+python3 clockify_support_cli_final.py --selftest
 ```
 
 ## What's New in v4.1.2
@@ -117,7 +117,7 @@ python3 clockify_support_cli_final.py ask "Your question" [--json]
 
 **Self-Test Command**:
 ```bash
-python3 clockify_support_cli_final.py selftest
+python3 clockify_support_cli_final.py --selftest
 ```
 
 ## Files
@@ -229,7 +229,7 @@ open htmlcov/index.html
 
 ### Run Self-Tests
 ```bash
-python3 clockify_support_cli.py chat --selftest
+python3 clockify_support_cli_final.py --selftest
 # Expected: [selftest] 4/4 tests passed
 ```
 
@@ -286,7 +286,7 @@ python3 clockify_support_cli.py --log DEBUG chat
 
 ### Build & Test
 - [ ] Build knowledge base: `python3 clockify_support_cli_final.py build knowledge_full.md`
-- [ ] Run self-tests: `python3 clockify_support_cli_final.py selftest`
+- [ ] Run self-tests: `python3 clockify_support_cli_final.py --selftest`
 - [ ] Run smoke tests: `bash scripts/smoke.sh`
 - [ ] Test query: `python3 clockify_support_cli_final.py ask "How do I track time?"`
 
@@ -344,7 +344,7 @@ gunicorn -w 4 --threads 1 app:app
 3. `M1_COMPATIBILITY.md` – Platform-specific optimizations
 
 ### ✅ For Testing & Validation (15 min)
-1. Run: `python3 clockify_support_cli_final.py selftest`
+1. Run: `python3 clockify_support_cli_final.py --selftest`
 2. Run: `bash scripts/smoke.sh`
 3. Run: `bash scripts/acceptance_test.sh`
 
@@ -438,7 +438,7 @@ For questions about:
 - **Quick Start**: See [Quick Start](#quick-start) above
 - **M1 Installation**: See `M1_COMPATIBILITY.md`
 - **Architecture**: See `CLAUDE.md`
-- **Testing**: Run `python3 clockify_support_cli_final.py selftest`
+- **Testing**: Run `python3 clockify_support_cli_final.py --selftest`
 - **Troubleshooting**: See `M1_COMPATIBILITY.md` (troubleshooting section)
 
 ### Common Issues

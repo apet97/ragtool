@@ -55,7 +55,7 @@ build:
 
 selftest:
 	@echo "Running self-test suite..."
-	source rag_env/bin/activate && python3 clockify_support_cli_final.py selftest
+	source rag_env/bin/activate && python3 clockify_support_cli_final.py --selftest
 
 chat:
 	@echo "Starting interactive chat (REPL)..."

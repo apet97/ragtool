@@ -44,7 +44,7 @@ fi
 
 # Step 4: Run self-test
 echo "[4/7] Running self-test..."
-python3 clockify_support_cli_final.py selftest 2>&1 | tee -a "$LOG_FILE"
+python3 clockify_support_cli_final.py --selftest 2>&1 | tee -a "$LOG_FILE"
 TEST_EXIT=$?
 if [ $TEST_EXIT -eq 0 ]; then
     echo "✅ Self-test passed" | tee -a "$LOG_FILE"
@@ -61,7 +61,7 @@ python3 clockify_support_cli_final.py ask "$QUERY" --json 2>&1 | tee -a "$LOG_FI
 if grep -q '"answer"' "$LOG_FILE"; then
     echo "✅ JSON output valid" | tee -a "$LOG_FILE"
 else
-    echo "⚠️  JSON output may not be present (expected if ask doesn't support JSON)" | tee -a "$LOG_FILE"
+    echo "❌ JSON output missing" | tee -a "$LOG_FILE"
 fi
 
 # Step 6: Chat query plain text
