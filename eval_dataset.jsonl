@@ -1,20 +1,20 @@
-{"query": "How do I track time in Clockify?", "relevant_chunk_ids": [12, 45, 67], "expected_answer_keywords": ["timer", "manual", "timesheet", "track"]}
-{"query": "What are the pricing plans?", "relevant_chunk_ids": [234, 235], "expected_answer_keywords": ["free", "basic", "standard", "pro", "enterprise", "pricing"]}
-{"query": "Can I track time offline?", "relevant_chunk_ids": [89, 102], "expected_answer_keywords": ["offline", "sync", "internet", "mobile"]}
-{"query": "How do I create a project?", "relevant_chunk_ids": [156, 178], "expected_answer_keywords": ["project", "create", "add", "workspace"]}
-{"query": "What is a workspace in Clockify?", "relevant_chunk_ids": [23, 34], "expected_answer_keywords": ["workspace", "team", "organization", "account"]}
-{"query": "How do I generate reports?", "relevant_chunk_ids": [267, 289, 301], "expected_answer_keywords": ["report", "export", "summary", "analytics"]}
-{"query": "Can I integrate Clockify with other tools?", "relevant_chunk_ids": [345, 367], "expected_answer_keywords": ["integration", "api", "connect", "apps"]}
-{"query": "How do I invite team members?", "relevant_chunk_ids": [123, 145], "expected_answer_keywords": ["invite", "member", "user", "team"]}
-{"query": "What are time entries?", "relevant_chunk_ids": [56, 78], "expected_answer_keywords": ["entry", "log", "record", "time"]}
-{"query": "How do I set billable rates?", "relevant_chunk_ids": [198, 210], "expected_answer_keywords": ["billable", "rate", "hourly", "invoice"]}
-{"query": "Can I track time on mobile?", "relevant_chunk_ids": [89, 102, 115], "expected_answer_keywords": ["mobile", "app", "ios", "android"]}
-{"query": "How do I delete a time entry?", "relevant_chunk_ids": [67, 78], "expected_answer_keywords": ["delete", "remove", "entry"]}
-{"query": "What is the Pomodoro timer?", "relevant_chunk_ids": [134, 156], "expected_answer_keywords": ["pomodoro", "timer", "break", "focus"]}
-{"query": "How do I export data?", "relevant_chunk_ids": [289, 301, 312], "expected_answer_keywords": ["export", "csv", "pdf", "excel"]}
-{"query": "Can I set project budgets?", "relevant_chunk_ids": [178, 198], "expected_answer_keywords": ["budget", "limit", "estimate", "project"]}
-{"query": "How do I configure SSO?", "relevant_chunk_ids": [401, 423], "expected_answer_keywords": ["sso", "saml", "authentication", "login"]}
-{"query": "What are tags in Clockify?", "relevant_chunk_ids": [145, 167], "expected_answer_keywords": ["tag", "label", "categorize", "filter"]}
-{"query": "How do I track breaks?", "relevant_chunk_ids": [56, 67, 78], "expected_answer_keywords": ["break", "pause", "idle", "time"]}
-{"query": "Can I lock time entries?", "relevant_chunk_ids": [234, 256], "expected_answer_keywords": ["lock", "approve", "prevent", "edit"]}
-{"query": "How do I set up time rounding?", "relevant_chunk_ids": [198, 210, 221], "expected_answer_keywords": ["round", "minutes", "settings", "precision"]}
+{"query": "How do I track time in Clockify?", "relevant_chunk_ids": ["11e39b12-34eb-454e-bd18-186a0a4ddd1c", "c44e5503-2d46-4049-a088-2266f168c839"], "expected_answer_keywords": ["timer", "manual", "timesheet", "track"]}
+{"query": "What are the pricing plans?", "relevant_chunk_ids": ["5cc3a0d4-aa14-43c4-9bc9-65887fed2963", "62076ca1-283d-4f55-89ee-88328e6b1937"], "expected_answer_keywords": ["free", "basic", "standard", "pro", "enterprise", "pricing"]}
+{"query": "Can I track time offline?", "relevant_chunk_ids": ["efe4b2b9-0664-4dfe-9d88-7e0bf6d028f2", "b100e940-7b64-4f88-bfe0-6f8fbe28f6a2"], "expected_answer_keywords": ["offline", "sync", "internet", "mobile"]}
+{"query": "How do I create a project?", "relevant_chunk_ids": ["2da85369-2232-44a1-b341-37452f9985d6", "6f5c72c5-8f7f-4adf-9862-048c01c301d0"], "expected_answer_keywords": ["project", "create", "add", "workspace"]}
+{"query": "What is a workspace in Clockify?", "relevant_chunk_ids": ["77b81004-0789-47a6-a3c2-54782041a7eb", "f96af8ab-8a62-4e11-93c9-956044a6a3c8"], "expected_answer_keywords": ["workspace", "team", "organization", "account"]}
+{"query": "How do I generate reports?", "relevant_chunk_ids": ["58e41662-5932-47df-ab6d-a850e56bb302", "8aa8008e-7107-448f-ac7b-3107c8d24c52"], "expected_answer_keywords": ["report", "export", "summary", "analytics"]}
+{"query": "Can I integrate Clockify with other tools?", "relevant_chunk_ids": ["52ec07c8-6036-41da-9e84-e00f75cd7352", "b30866a5-25e3-48a1-ab78-658db4608474"], "expected_answer_keywords": ["integration", "api", "connect", "apps"]}
+{"query": "How do I invite team members?", "relevant_chunk_ids": ["eafcf6b7-acdd-424f-b43c-cd7be2c2850f", "5eda692a-56e1-4913-b273-5127722773c2"], "expected_answer_keywords": ["invite", "member", "user", "team"]}
+{"query": "What are time entries?", "relevant_chunk_ids": ["32539b04-f16f-414d-b3c4-856989e9bc75", "60b424d4-940e-45ff-8d50-4bdc623de48b"], "expected_answer_keywords": ["entry", "log", "record", "time"]}
+{"query": "How do I set billable rates?", "relevant_chunk_ids": ["d7f07b6e-8ecd-4f82-bffc-461d056efb8d", "4a51d878-83f8-48a4-a342-8ca971d4f47d"], "expected_answer_keywords": ["billable", "rate", "hourly", "invoice"]}
+{"query": "Can I track time on mobile?", "relevant_chunk_ids": ["bc7679a1-48ec-4ba5-b9bc-b25c40147206", "b100e940-7b64-4f88-bfe0-6f8fbe28f6a2"], "expected_answer_keywords": ["mobile", "app", "ios", "android"]}
+{"query": "How do I delete a time entry?", "relevant_chunk_ids": ["c01838ec-72a4-460f-bf3e-f18c0e1f74a4", "c7df3f4f-604a-4f8a-95c6-21e7d47fb19c"], "expected_answer_keywords": ["delete", "remove", "entry"]}
+{"query": "What is the Pomodoro timer?", "relevant_chunk_ids": ["cf15f290-e75d-401a-a38f-179e81f9becf", "3e805c83-8d5b-4416-91a6-77864278e8c7"], "expected_answer_keywords": ["pomodoro", "timer", "break", "focus"]}
+{"query": "How do I export data?", "relevant_chunk_ids": ["8aa8008e-7107-448f-ac7b-3107c8d24c52", "06523cb0-ece9-44a5-9371-f8fc02e5c002"], "expected_answer_keywords": ["export", "csv", "pdf", "excel"]}
+{"query": "Can I set project budgets?", "relevant_chunk_ids": ["19d7b661-e362-40ce-beaf-9b3b7da67989", "316b8aa5-9c39-4ee4-ba34-d083d139ea9f"], "expected_answer_keywords": ["budget", "limit", "estimate", "project"]}
+{"query": "How do I configure SSO?", "relevant_chunk_ids": ["7f6b5594-d96a-4bb9-9417-772ca49266c3", "53801b37-41ad-4052-ab0c-8209d4d2ecf3"], "expected_answer_keywords": ["sso", "saml", "authentication", "login"]}
+{"query": "What are tags in Clockify?", "relevant_chunk_ids": ["44722aab-987b-4012-94c3-63b964da19b0", "ad38b0ba-2d33-4d21-a434-a3fb22fac652"], "expected_answer_keywords": ["tag", "label", "categorize", "filter"]}
+{"query": "How do I track breaks?", "relevant_chunk_ids": ["f675e0d9-2d6d-45e7-9315-172e9fe7b35d", "c8604019-3873-443d-bc6a-0ca91e207596"], "expected_answer_keywords": ["break", "pause", "idle", "time"]}
+{"query": "Can I lock time entries?", "relevant_chunk_ids": ["01621912-981f-4f3b-ad4d-cd7c0db54e6b", "412b8658-193c-45da-b68c-0990601826b3"], "expected_answer_keywords": ["lock", "approve", "prevent", "edit"]}
+{"query": "How do I set up time rounding?", "relevant_chunk_ids": ["9c3321cb-3ac2-4aaa-833a-df57270e0ad5", "8ff7a2c8-97f3-41e6-bbb0-ec6d9df92b65"], "expected_answer_keywords": ["round", "minutes", "settings", "precision"]}
