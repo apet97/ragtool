@@ -8,6 +8,9 @@ urllib3==2.2.3
 # Numerical computing and data structures
 numpy==2.3.4
 
+# Tokenization (optional, for accurate token counting - Rank 5 improvement)
+tiktoken>=0.5.0
+
 # Embeddings and retrieval
 sentence-transformers==3.3.1
 torch==2.4.2
