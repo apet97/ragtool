@@ -38,6 +38,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from typing import Any, Optional
 import threading
 import time
 import unicodedata
@@ -1411,7 +1412,61 @@ def embed_query(question: str, retries=0) -> np.ndarray:
     except Exception as e:
         raise EmbeddingError(f"Query embedding failed: {e}") from e
 
-def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0) -> tuple[list[int], dict[str, np.ndarray]]:
+class DenseScoreStore:
+    """Container for dense similarity scores with optional lazy materialization."""
+
+    __slots__ = ("_length", "_full", "_vecs", "_qv", "_cache")
+
+    def __init__(self, length: int, *, full_scores: Optional[np.ndarray] = None,
+                 vecs: Optional[np.ndarray] = None, qv: Optional[np.ndarray] = None,
+                 initial: Optional[list[tuple[int, float]]] = None) -> None:
+        self._length = int(length)
+        self._full: Optional[np.ndarray] = None
+        self._vecs = vecs
+        self._qv = qv
+        self._cache: dict[int, float] = {}
+
+        if full_scores is not None:
+            self._full = np.asarray(full_scores, dtype="float32")
+        elif initial:
+            self._cache.update({int(idx): float(score) for idx, score in initial})
+
+    def __len__(self) -> int:  # pragma: no cover - trivial
+        return self._length
+
+    def _materialize_full(self) -> np.ndarray:
+        if self._full is None:
+            if self._vecs is None or self._qv is None:
+                self._full = np.zeros(self._length, dtype="float32")
+            else:
+                self._full = self._vecs.dot(self._qv).astype("float32")
+        return self._full
+
+    def __getitem__(self, idx: int) -> float:
+        idx = int(idx)
+        if idx < 0 or idx >= self._length:
+            raise IndexError(idx)
+
+        if self._full is not None:
+            return float(self._full[idx])
+
+        if idx not in self._cache:
+            if self._vecs is None or self._qv is None:
+                raise KeyError(idx)
+            self._cache[idx] = float(self._vecs[idx].dot(self._qv))
+        return self._cache[idx]
+
+    def get(self, idx: int, default: Optional[float] = None) -> Optional[float]:
+        try:
+            return self[idx]
+        except (IndexError, KeyError):
+            return default
+
+    def to_array(self) -> np.ndarray:
+        return self._materialize_full().copy()
+
+
+def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0) -> tuple[list[int], dict[str, Any]]:
     """Hybrid retrieval: dense + BM25 + dedup. Optionally uses FAISS/HNSW for fast K-NN.
 
     Scoring: hybrid = ALPHA_HYBRID * normalize(BM25) + (1 - ALPHA_HYBRID) * normalize(dense)
@@ -1440,11 +1495,20 @@ def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0) 
         else:
             logger.info("info: ann=fallback reason=missing-index")
 
+    dense_scores_full = None
+    candidate_idx: list[int] = []
+
     # Use FAISS if available for fast candidate generation
     if _FAISS_INDEX:
-        D, I = _FAISS_INDEX.search(qv_n.reshape(1, -1).astype("float32"), max(ANN_CANDIDATE_MIN, top_k * FAISS_CANDIDATE_MULTIPLIER))
-        candidate_idx = [int(i) for i in I[0] if i >= 0]
-        dense_scores = np.array([float(d) for d in D[0][:len(candidate_idx)]])
+        D, I = _FAISS_INDEX.search(
+            qv_n.reshape(1, -1).astype("float32"),
+            max(ANN_CANDIDATE_MIN, top_k * FAISS_CANDIDATE_MULTIPLIER)
+        )
+        distances = np.asarray(D[0], dtype="float32")
+        indices = np.asarray(I[0], dtype=np.int64)
+        mask = indices >= 0
+        candidate_idx = indices[mask].astype(int).tolist()
+        dense_scores = distances[mask]
     # Fallback to HNSW if available
     elif hnsw:
         _, cand = hnsw.knn_query(qv_n, k=max(ANN_CANDIDATE_MIN, top_k * FAISS_CANDIDATE_MULTIPLIER))
@@ -1454,26 +1518,37 @@ def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0) 
     else:
         # Task H: dense scoring uses np.dot with float32
         dense_scores = vecs_n.dot(qv_n)
-        candidate_idx = np.arange(len(chunks))
+        candidate_idx = np.arange(len(chunks)).tolist()
 
-    # Compute full scores once for reuse (performance optimization)
-    dense_scores_full = vecs_n.dot(qv_n)
+    if not candidate_idx:
+        dense_scores_full = vecs_n.dot(qv_n)
+        candidate_idx = np.arange(len(chunks)).tolist()
+        dense_scores = dense_scores_full
+
+    candidate_idx_array = np.array(candidate_idx, dtype=np.int32)
     # Use expanded query for BM25 (keyword matching benefits from synonyms)
     # Rank 24: Pass top_k for early termination on large corpora
     bm_scores_full = bm25_scores(expanded_question, bm, top_k=top_k * 3)
 
     # Normalize once, then slice for candidates (avoids 4x redundant normalization)
-    zs_dense_full = normalize_scores_zscore(dense_scores_full)
     zs_bm_full = normalize_scores_zscore(bm_scores_full)
-
-    # Slice cached scores for candidates
-    zs_dense = zs_dense_full[candidate_idx] if (_FAISS_INDEX or hnsw) else zs_dense_full
-    zs_bm = zs_bm_full[candidate_idx] if (_FAISS_INDEX or hnsw) else zs_bm_full
+    zs_dense_full = None
+    if dense_scores_full is not None:
+        dense_scores_full = np.asarray(dense_scores_full, dtype="float32")
+        zs_dense_full = normalize_scores_zscore(dense_scores_full)
+        zs_dense = zs_dense_full[candidate_idx_array] if candidate_idx_array.size else np.array([], dtype="float32")
+    else:
+        dense_scores = np.asarray(dense_scores, dtype="float32")
+        zs_dense = normalize_scores_zscore(dense_scores)
+    zs_bm = zs_bm_full[candidate_idx_array] if candidate_idx_array.size else np.array([], dtype="float32")
 
     # v4.1: Use configurable ALPHA_HYBRID for blending
     hybrid = ALPHA_HYBRID * zs_bm + (1 - ALPHA_HYBRID) * zs_dense
-    top_idx = np.argsort(hybrid)[::-1][:top_k]
-    top_idx = np.array(candidate_idx)[top_idx]  # Map back to original indices
+    if hybrid.size:
+        top_positions = np.argsort(hybrid)[::-1][:top_k]
+        top_idx = candidate_idx_array[top_positions]
+    else:
+        top_idx = np.array([], dtype=np.int32)
 
     seen = set()
     filtered = []
@@ -1485,10 +1560,23 @@ def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0) 
         filtered.append(i)
 
     # Reuse cached normalized scores for full hybrid (already computed above)
-    hybrid_full = ALPHA_HYBRID * zs_bm_full + (1 - ALPHA_HYBRID) * zs_dense_full
+    if zs_dense_full is not None:
+        hybrid_full = ALPHA_HYBRID * zs_bm_full + (1 - ALPHA_HYBRID) * zs_dense_full
+    else:
+        hybrid_full = np.zeros(len(chunks), dtype="float32")
+        for idx, score in zip(candidate_idx, hybrid):
+            hybrid_full[idx] = score
+
+    if dense_scores_full is not None:
+        dense_scores_store = DenseScoreStore(len(chunks), full_scores=dense_scores_full)
+    else:
+        dense_scores_store = DenseScoreStore(
+            len(chunks), vecs=vecs_n, qv=qv_n,
+            initial=list(zip(candidate_idx, dense_scores))
+        )
 
     return filtered, {
-        "dense": dense_scores_full,
+        "dense": dense_scores_store,
         "bm25": bm_scores_full,
         "hybrid": hybrid_full
     }

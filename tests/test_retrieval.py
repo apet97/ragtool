@@ -6,7 +6,8 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from clockify_support_cli_final import retrieve, normalize_scores_zscore, sanitize_question
+import clockify_support_cli_final as cli
+from clockify_support_cli_final import retrieve, normalize_scores_zscore, sanitize_question, DenseScoreStore
 
 
 def test_retrieve_returns_correct_top_k(sample_chunks, sample_embeddings, sample_bm25):
@@ -48,9 +49,10 @@ def test_retrieve_scores_structure(sample_chunks, sample_embeddings, sample_bm25
     assert "bm25" in scores, "Should have BM25 scores"
     assert "hybrid" in scores, "Should have hybrid scores"
 
-    # Check array lengths
+    # Check structures
     n_chunks = len(sample_chunks)
-    assert len(scores["dense"]) == n_chunks, "Dense scores should match chunk count"
+    assert isinstance(scores["dense"], DenseScoreStore), "Dense scores should use DenseScoreStore"
+    assert len(scores["dense"]) == n_chunks, "Dense score store should report full length"
     assert len(scores["bm25"]) == n_chunks, "BM25 scores should match chunk count"
     assert len(scores["hybrid"]) == n_chunks, "Hybrid scores should match chunk count"
 
@@ -142,7 +144,67 @@ def test_retrieve_scores_are_numeric(sample_chunks, sample_embeddings, sample_bm
 
     selected, scores = retrieve(question, sample_chunks, sample_embeddings, sample_bm25)
 
-    for score_type in ["dense", "bm25", "hybrid"]:
+    dense_scores = scores["dense"]
+    assert selected, "Should have at least one selected chunk"
+    for idx in selected:
+        assert np.isfinite(dense_scores[idx]), "Dense scores should be finite for selected chunks"
+
+    for score_type in ["bm25", "hybrid"]:
         score_array = scores[score_type]
         assert np.all(np.isfinite(score_array)), f"{score_type} scores should be finite"
         assert not np.any(np.isnan(score_array)), f"{score_type} scores should not contain NaN"
+
+
+def test_retrieve_faiss_skips_full_dot(monkeypatch, sample_chunks, sample_embeddings, sample_bm25):
+    """Ensure FAISS retrieval path does not compute full dense dot product."""
+
+    class TrackingMatrix:
+        def __init__(self, arr):
+            self._arr = arr
+            self.dot_calls = 0
+
+        def dot(self, other):
+            self.dot_calls += 1
+            return self._arr.dot(other)
+
+        def __getitem__(self, item):
+            return self._arr[item]
+
+        def __len__(self):
+            return len(self._arr)
+
+        @property
+        def shape(self):
+            return self._arr.shape
+
+    class FakeFaissIndex:
+        def __init__(self):
+            self.search_calls = 0
+
+        def search(self, query, k):
+            self.search_calls += 1
+            total = len(sample_chunks)
+            actual = min(k, total)
+            distances = np.linspace(1.0, 0.5, actual, dtype=np.float32)
+            indices = np.arange(actual, dtype=np.int64)
+            padded_dist = np.zeros(k, dtype=np.float32)
+            padded_idx = np.full(k, -1, dtype=np.int64)
+            padded_dist[:actual] = distances
+            padded_idx[:actual] = indices
+            return padded_dist.reshape(1, -1), padded_idx.reshape(1, -1)
+
+    tracker = TrackingMatrix(sample_embeddings)
+    fake_index = FakeFaissIndex()
+
+    monkeypatch.setattr(cli, "_FAISS_INDEX", fake_index, raising=False)
+    monkeypatch.setattr(cli, "USE_ANN", "faiss", raising=False)
+
+    # Avoid external embedding call
+    query_vec = sample_embeddings[0]
+    monkeypatch.setattr(cli, "embed_query", lambda question, retries=0: query_vec, raising=False)
+
+    selected, scores = cli.retrieve("How do I track time?", sample_chunks, tracker, sample_bm25, top_k=3)
+
+    assert tracker.dot_calls == 0, "FAISS path should not compute full dot product"
+    assert fake_index.search_calls == 1, "FAISS index should be used"
+    assert isinstance(scores["dense"], DenseScoreStore), "Dense scores should use store in FAISS mode"
