@@ -1639,6 +1639,57 @@ def inject_policy_preamble(snippets_block: str, question: str) -> str:
         return policy + snippets_block
     return snippets_block
 
+# ====== INPUT SANITIZATION ======
+def sanitize_question(q: str, max_length: int = 2000) -> str:
+    """Validate and sanitize user question.
+
+    Args:
+        q: User question string
+        max_length: Maximum allowed question length (default: 2000)
+
+    Returns:
+        Sanitized question string
+
+    Raises:
+        ValueError: If question is invalid (empty, too long, invalid characters)
+    """
+    # Type check
+    if not isinstance(q, str):
+        raise ValueError("Question must be a string")
+
+    # Strip whitespace
+    q = q.strip()
+
+    # Check length
+    if len(q) == 0:
+        raise ValueError("Question cannot be empty")
+    if len(q) > max_length:
+        raise ValueError(f"Question too long (max {max_length} characters, got {len(q)})")
+
+    # Check for null bytes first (specific check)
+    if '\x00' in q:
+        raise ValueError("Question contains null bytes")
+
+    # Check for control characters (except newline, tab, carriage return)
+    if any(ord(c) < 32 and c not in '\n\r\t' for c in q):
+        raise ValueError("Question contains invalid control characters")
+
+    # Check for suspicious patterns (basic prompt injection detection)
+    suspicious_patterns = [
+        '<script',
+        'javascript:',
+        'eval(',
+        'exec(',
+        '__import__',
+        '<?php',
+    ]
+    q_lower = q.lower()
+    for pattern in suspicious_patterns:
+        if pattern in q_lower:
+            raise ValueError(f"Question contains suspicious pattern: {pattern}")
+
+    return q
+
 # ====== ANSWER (STATELESS) ======
 def answer_once(
     question: str,
@@ -1657,6 +1708,13 @@ def answer_once(
     retries=0
 ):
     """Answer a single question. Stateless. Returns (answer_text, metadata) - Task B, C, F."""
+    # Sanitize question input
+    try:
+        question = sanitize_question(question)
+    except ValueError as e:
+        logger.warning(f"Invalid question: {e}")
+        return f"Invalid question: {e}", {"selected": [], "scores": [], "timings": {}, "refused": False}
+
     turn_start = time.time()
     timings = {}
     try:
