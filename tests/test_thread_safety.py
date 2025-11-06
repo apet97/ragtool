@@ -18,7 +18,7 @@ def test_query_cache_thread_safe():
 
     def worker(question, answer):
         try:
-            cache.put(question, answer, {"timestamp": time.time()})
+            cache.put(question, answer, {})
             result = cache.get(question)
             results.append((question, result))
         except Exception as e:
@@ -41,6 +41,12 @@ def test_query_cache_thread_safe():
     # Verify all queries cached correctly (allowing for some evictions if cache full)
     successful_gets = sum(1 for _, result in results if result is not None)
     assert successful_gets >= 90, f"At least 90% should be cached, got {successful_gets}"
+
+    for _, result in results:
+        if result is None:
+            continue
+        _, metadata = result
+        assert "timestamp" in metadata
 
 
 def test_rate_limiter_thread_safe():
