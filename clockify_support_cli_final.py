@@ -1829,6 +1829,113 @@ RATE_LIMITER = RateLimiter(
     window_seconds=int(os.environ.get("RATE_LIMIT_WINDOW", "60"))
 )
 
+# ====== QUERY CACHING (Rank 14) ======
+class QueryCache:
+    """TTL-based cache for repeated queries to eliminate redundant computation."""
+
+    def __init__(self, maxsize=100, ttl_seconds=3600):
+        """Initialize query cache.
+
+        Args:
+            maxsize: Maximum number of cached queries (LRU eviction)
+            ttl_seconds: Time-to-live for cache entries in seconds
+        """
+        self.maxsize = maxsize
+        self.ttl_seconds = ttl_seconds
+        self.cache = {}  # {question_hash: (answer, metadata, timestamp)}
+        self.access_order = deque()  # For LRU eviction
+        self.hits = 0
+        self.misses = 0
+
+    def _hash_question(self, question: str) -> str:
+        """Generate cache key from question."""
+        return hashlib.md5(question.encode('utf-8')).hexdigest()
+
+    def get(self, question: str):
+        """Retrieve cached answer if available and not expired.
+
+        Returns:
+            (answer, metadata) tuple if cache hit, None if cache miss
+        """
+        key = self._hash_question(question)
+
+        if key not in self.cache:
+            self.misses += 1
+            return None
+
+        answer, metadata, timestamp = self.cache[key]
+        age = time.time() - timestamp
+
+        # Check if expired
+        if age > self.ttl_seconds:
+            del self.cache[key]
+            self.access_order.remove(key)
+            self.misses += 1
+            return None
+
+        # Cache hit - update access order
+        self.access_order.remove(key)
+        self.access_order.append(key)
+        self.hits += 1
+        logger.debug(f"[cache] HIT question_hash={key[:8]} age={age:.1f}s")
+        return answer, metadata
+
+    def put(self, question: str, answer: str, metadata: dict):
+        """Store answer in cache.
+
+        Args:
+            question: User question
+            answer: Generated answer
+            metadata: Answer metadata (selected chunks, scores, etc.)
+        """
+        key = self._hash_question(question)
+
+        # Evict oldest entry if cache full
+        if len(self.cache) >= self.maxsize and key not in self.cache:
+            oldest = self.access_order.popleft()
+            del self.cache[oldest]
+            logger.debug(f"[cache] EVICT question_hash={oldest[:8]} (LRU)")
+
+        # Store entry with timestamp
+        self.cache[key] = (answer, metadata, time.time())
+
+        # Update access order
+        if key in self.access_order:
+            self.access_order.remove(key)
+        self.access_order.append(key)
+
+        logger.debug(f"[cache] PUT question_hash={key[:8]}")
+
+    def clear(self):
+        """Clear all cache entries."""
+        self.cache.clear()
+        self.access_order.clear()
+        self.hits = 0
+        self.misses = 0
+        logger.info("[cache] CLEAR")
+
+    def stats(self) -> dict:
+        """Get cache statistics.
+
+        Returns:
+            Dict with hits, misses, size, hit_rate
+        """
+        total = self.hits + self.misses
+        hit_rate = self.hits / total if total > 0 else 0.0
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "size": len(self.cache),
+            "maxsize": self.maxsize,
+            "hit_rate": hit_rate
+        }
+
+# Global query cache (100 entries, 1 hour TTL by default)
+QUERY_CACHE = QueryCache(
+    maxsize=int(os.environ.get("CACHE_MAXSIZE", "100")),
+    ttl_seconds=int(os.environ.get("CACHE_TTL", "3600"))
+)
+
 # ====== STRUCTURED LOGGING ======
 def log_query(query, answer, retrieved_chunks, latency_ms, refused=False, metadata=None):
     """Log query with structured JSON format for monitoring and analytics.
@@ -2015,6 +2122,15 @@ def answer_once(
             "selected": [], "scores": [], "timings": {}, "refused": False, "rate_limited": True
         }
 
+    # Check query cache (Rank 14: 100% speedup on repeated queries)
+    cached_result = QUERY_CACHE.get(question)
+    if cached_result is not None:
+        answer, metadata = cached_result
+        # Add cache indicator to metadata
+        metadata["cached"] = True
+        metadata["cache_hit"] = True
+        return answer, metadata
+
     turn_start = time.time()
     timings = {}
     try:
@@ -2050,7 +2166,11 @@ def answer_once(
                 metadata={"debug": debug, "backend": EMB_BACKEND, "coverage_pass": False}
             )
 
-            return REFUSAL_STR, {"selected": []}
+            # Cache refusal (Rank 14)
+            refusal_metadata = {"selected": [], "refused": True, "cached": False, "cache_hit": False}
+            QUERY_CACHE.put(question, REFUSAL_STR, refusal_metadata)
+
+            return REFUSAL_STR, refusal_metadata
 
         # Step 5: Pack with token budget and snippet cap (Task C)
         block, ids, used_tokens = pack_snippets(chunks, mmr_selected, pack_top=pack_top, budget_tokens=CTX_TOKEN_BUDGET, num_ctx=num_ctx)
@@ -2124,7 +2244,11 @@ def answer_once(
             }
         )
 
-        return ans, {"selected": ids}
+        # Cache successful answer (Rank 14)
+        result_metadata = {"selected": ids, "cached": False, "cache_hit": False}
+        QUERY_CACHE.put(question, ans, result_metadata)
+
+        return ans, result_metadata
     except (EmbeddingError, LLMError, BuildError):
         # Re-raise specific exceptions
         raise
