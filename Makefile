@@ -55,6 +55,10 @@ smoke:
 	@echo "Running smoke test suite..."
 	bash scripts/smoke.sh
 
+test:
+	@echo "Running unit tests with coverage..."
+	python3 -m pytest tests/ -v --cov=clockify_support_cli_final --cov-report=term-missing --cov-report=html
+
 clean:
 	@echo "Cleaning generated artifacts..."
 	rm -f chunks.jsonl vecs_n.npy vecs.npy meta.jsonl bm25.json index.meta.json

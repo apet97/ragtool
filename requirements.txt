@@ -22,7 +22,9 @@ rank-bm25==0.2.2
 #   - Application has graceful fallback if FAISS is unavailable
 faiss-cpu==1.8.0.post1
 
-# Optional: for development/testing
-# pytest==7.4.4
-# black==24.1.1
-# pylint==3.0.3
+# Development and testing dependencies
+pytest==8.3.4
+pytest-cov==6.0.0
+pytest-xdist==3.5.0  # Parallel test execution
+black==24.1.1
+pylint==3.0.3
