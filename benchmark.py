@@ -250,8 +250,8 @@ def benchmark_embedding_large_batch(chunks, iterations=3):
 
 
 # ====== RETRIEVAL BENCHMARKS ======
-def benchmark_retrieval_bm25(chunks, vecs_n, bm, iterations=20):
-    """Benchmark BM25-only retrieval."""
+def benchmark_retrieval_hybrid(chunks, vecs_n, bm, iterations=20):
+    """Benchmark hybrid (BM25 + dense) retrieval (Rank 16: fixed misleading name)."""
     question = "How do I track time in Clockify?"
     profiles = []
 
@@ -383,7 +383,7 @@ def main():
     # Retrieval benchmarks
     if not args.embedding and not args.e2e:
         print("--- Retrieval Benchmarks ---")
-        results.append(benchmark_retrieval_bm25(chunks, vecs_n, bm, iterations=int(20 * iter_multiplier)))
+        results.append(benchmark_retrieval_hybrid(chunks, vecs_n, bm, iterations=int(20 * iter_multiplier)))
         print(f"✅ {results[-1].name}: {results[-1].summary()['latency_ms']['mean']:.2f}ms")
 
         results.append(benchmark_retrieval_with_mmr(chunks, vecs_n, bm, iterations=int(20 * iter_multiplier)))

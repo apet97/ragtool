@@ -155,6 +155,8 @@ REFUSAL_STR = "I don't know based on the MD."
 # Query logging configuration
 QUERY_LOG_FILE = os.environ.get("RAG_LOG_FILE", "rag_queries.jsonl")
 QUERY_LOG_DISABLED = os.environ.get("RAG_NO_LOG", "").lower() in {"1", "true", "yes", "on"}
+LOG_QUERY_INCLUDE_ANSWER = os.environ.get("RAG_LOG_INCLUDE_ANSWER", "1").lower() in {"1", "true", "yes", "on"}
+LOG_QUERY_ANSWER_PLACEHOLDER = os.environ.get("RAG_LOG_ANSWER_PLACEHOLDER", "[REDACTED]")
 
 FILES = {
     "chunks": "chunks.jsonl",
@@ -1425,13 +1427,15 @@ def expand_query(question: str) -> str:
 
     expansions = load_query_expansion_dict()
     q_lower = question.lower()
-    expanded_terms = set()
+    expanded_terms = []  # Use list instead of set for deterministic ordering
 
-    # Find matching terms and add their synonyms
+    # Find matching terms and add their synonyms (Rank 4: deterministic expansion)
     for term, synonyms in expansions.items():
         # Check for whole word matches (avoid partial matches like "track" in "attraction")
         if re.search(r'\b' + re.escape(term) + r'\b', q_lower):
-            expanded_terms.update(synonyms)
+            for syn in synonyms:
+                if syn not in expanded_terms:
+                    expanded_terms.append(syn)
 
     # Combine original question with expanded terms
     if expanded_terms:
@@ -1587,13 +1591,12 @@ def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0) 
         dot_elapsed = time.perf_counter() - dot_start
         dense_computed = n_chunks
     else:
-        # Task H: dense scoring uses np.dot with float32
+        # Task H: dense scoring uses np.dot with float32 (Rank 14: reuse dense_scores_full)
         dot_start = time.perf_counter()
         dense_scores_full = vecs_n.dot(qv_n)
         dot_elapsed = time.perf_counter() - dot_start
         dense_computed = n_chunks
-        candidate_idx = np.arange(n_chunks)
-        dense_scores = vecs_n.dot(qv_n)
+        dense_scores = dense_scores_full
         candidate_idx = np.arange(len(chunks)).tolist()
 
     if not candidate_idx:
@@ -2435,6 +2438,10 @@ def log_query(query, answer, retrieved_chunks, latency_ms, refused=False, metada
         refused: Whether answer was refused (returned REFUSAL_STR)
         metadata: Optional dict with additional metadata (debug, backend, etc.)
     """
+    # Early exit if logging is disabled (Rank 7: avoid needless work)
+    if QUERY_LOG_DISABLED:
+        return
+
     normalized_chunks = []
     for chunk in retrieved_chunks:
         if isinstance(chunk, dict):
@@ -2458,18 +2465,16 @@ def log_query(query, answer, retrieved_chunks, latency_ms, refused=False, metada
     bm25_scores = [c.get("bm25", 0.0) for c in normalized_chunks]
     hybrid_scores = [c.get("hybrid", 0.0) for c in normalized_chunks]
     primary_scores = hybrid_scores if hybrid_scores else []
-    if QUERY_LOG_DISABLED:
-        return
 
-    # Extract chunk IDs and scores
-    chunk_ids = [c["id"] if isinstance(c, dict) else c for c in retrieved_chunks]
-    chunk_scores = [c.get("score", 0.0) if isinstance(c, dict) else 0.0 for c in retrieved_chunks]
+    # Honor LOG_QUERY_INCLUDE_ANSWER flag (Rank 15)
+    entry_answer = answer if LOG_QUERY_INCLUDE_ANSWER else LOG_QUERY_ANSWER_PLACEHOLDER
 
     log_entry = {
         "timestamp": time.time(),
         "timestamp_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "query": query,
         "query_length": len(query),
+        "answer": entry_answer,
         "answer_length": len(answer),
         "num_chunks_retrieved": len(chunk_ids),
         "chunk_ids": chunk_ids,
@@ -2487,7 +2492,10 @@ def log_query(query, answer, retrieved_chunks, latency_ms, refused=False, metada
     }
 
     try:
-        with open(QUERY_LOG_FILE, "a", encoding="utf-8") as f:
+        # Ensure parent directory exists (Rank 19)
+        log_path = pathlib.Path(QUERY_LOG_FILE)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(log_entry) + "\n")
     except Exception as e:
         logger.warning(f"Failed to write query log: {e}")
@@ -2691,7 +2699,14 @@ def answer_once(
         }
 
     # Check query cache (Rank 14: 100% speedup on repeated queries)
-    cached_result = QUERY_CACHE.get(question)
+    # Include retrieval parameters in cache key to prevent stale answers (Rank 3)
+    cache_params = {
+        "top_k": top_k,
+        "pack_top": pack_top,
+        "threshold": threshold,
+        "use_rerank": use_rerank
+    }
+    cached_result = QUERY_CACHE.get(question, params=cache_params)
     if cached_result is not None:
         answer, cached_metadata = cached_result
         # Work on a copy so cached metadata (including timestamp) remains intact
@@ -2739,14 +2754,8 @@ def answer_once(
             }
         mmr_rank_by_id = {chunks[idx]["id"]: rank for rank, idx in enumerate(mmr_selected)}
 
-        # Step 4: Coverage check
-        coverage_pass = coverage_ok(mmr_selected, dense_scores_all, threshold)
+        # Step 4: Coverage check (Rank 8: removed duplicate check)
         coverage_pass = coverage_ok(mmr_selected, scores["dense"], threshold)
-        chunk_id_to_index = {
-            chunk.get("id"): idx
-            for idx, chunk in enumerate(chunks)
-            if isinstance(chunk, dict) and "id" in chunk
-        }
         if not coverage_pass:
             if debug:
                 print(f"\n[DEBUG] Coverage failed: {len(mmr_selected)} selected, need ≥2 @ {threshold}")
@@ -2804,7 +2813,7 @@ def answer_once(
             # Cache refusal (Rank 14)
             refusal_metadata = {"selected": [], "refused": True, "cached": False, "cache_hit": False, "used_tokens": 0}
             refusal_metadata["timestamp"] = time.time()
-            QUERY_CACHE.put(question, REFUSAL_STR, refusal_metadata)
+            QUERY_CACHE.put(question, REFUSAL_STR, refusal_metadata, params=cache_params)
 
             return REFUSAL_STR, refusal_metadata
 
@@ -2862,12 +2871,16 @@ def answer_once(
             f"selected={len(mmr_selected)} packed={len(ids)} used_tokens={used_tokens}{conf_str}"
         )
 
-        # Log successful query
+        # Log successful query (Rank 6: consolidated retrieved_chunks building)
         latency_ms = int(timings['total'] * 1000)
         retrieved_chunks = []
         for pack_rank, chunk_id in enumerate(ids):
             info = chunk_scores_by_id.get(chunk_id)
             if info is None:
+                continue
+            idx = info["index"]
+            chunk = chunks[idx]
+            if not isinstance(chunk, dict):
                 continue
             entry = {
                 "id": chunk_id,
@@ -2875,30 +2888,15 @@ def answer_once(
                 "dense": info["dense"],
                 "bm25": info["bm25"],
                 "hybrid": info["hybrid"],
+                "chunk": chunk,
             }
             mmr_rank = mmr_rank_by_id.get(chunk_id)
             if mmr_rank is not None:
                 entry["mmr_rank"] = mmr_rank
-            rerank_score = rerank_scores.get(info["index"])
+            rerank_score = rerank_scores.get(idx)
             if rerank_score is not None:
                 entry["rerank_score"] = float(rerank_score)
             retrieved_chunks.append(entry)
-        dense_scores = scores["dense"]
-        retrieved_chunks = []
-        for cid in ids:
-            idx = chunk_id_to_index.get(cid)
-            if idx is None or idx < 0 or idx >= len(chunks) or idx >= len(dense_scores):
-                continue
-            chunk = chunks[idx]
-            if not isinstance(chunk, dict):
-                continue
-            retrieved_chunks.append(
-                {
-                    "id": cid,
-                    "score": float(dense_scores[idx]),
-                    "chunk": chunk,
-                }
-            )
 
         log_query(
             query=question,
@@ -2930,7 +2928,7 @@ def answer_once(
             "confidence": confidence
         }
         result_metadata["timestamp"] = time.time()
-        QUERY_CACHE.put(question, ans, result_metadata)
+        QUERY_CACHE.put(question, ans, result_metadata, params=cache_params)
 
         return ans, result_metadata
     except (EmbeddingError, LLMError, BuildError):

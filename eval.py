@@ -277,11 +277,6 @@ def evaluate(dataset_path="eval_datasets/clockify_v1.jsonl", verbose=False):
             print(f"Error building lexical index: {exc}")
             sys.exit(1)
 
-        from clockify_support_cli_final import load_index, retrieve
-    except ImportError as e:
-        print(f"Error importing RAG functions: {e}")
-        sys.exit(1)
-
     # Load index
     print("Loading knowledge base index...")
     try:

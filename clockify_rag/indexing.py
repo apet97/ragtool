@@ -13,7 +13,7 @@ from collections import Counter
 import numpy as np
 
 from .chunking import build_chunks
-from .config import (BM25_K1, BM25_B, FILES, USE_ANN, ANN_NLIST, ANN_NPROBE,
+from .config import (BM25_K1, BM25_B, DEFAULT_SEED, FILES, USE_ANN, ANN_NLIST, ANN_NPROBE,
                      GEN_MODEL, EMB_MODEL, EMB_BACKEND, MMR_LAMBDA, CHUNK_CHARS,
                      CHUNK_OVERLAP)
 from .embedding import embed_texts, embed_local_batch, load_embedding_cache, save_embedding_cache
@@ -66,7 +66,9 @@ def build_faiss_index(vecs: np.ndarray, nlist: int = 256, metric: str = "ip") ->
             index = faiss.IndexIVFFlat(quantizer, dim, m1_nlist, faiss.METRIC_INNER_PRODUCT)
 
             if len(vecs) >= m1_train_size:
-                train_indices = np.random.choice(len(vecs), m1_train_size, replace=False)
+                # Seed RNG for reproducible training (Rank 11)
+                rng = np.random.default_rng(DEFAULT_SEED)
+                train_indices = rng.choice(len(vecs), m1_train_size, replace=False)
                 train_vecs = vecs_f32[train_indices]
             else:
                 train_vecs = vecs_f32
@@ -88,7 +90,9 @@ def build_faiss_index(vecs: np.ndarray, nlist: int = 256, metric: str = "ip") ->
         index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
 
         train_size = min(20000, len(vecs))
-        train_indices = np.random.choice(len(vecs), train_size, replace=False)
+        # Seed RNG for reproducible training (Rank 11)
+        rng = np.random.default_rng(DEFAULT_SEED)
+        train_indices = rng.choice(len(vecs), train_size, replace=False)
         train_vecs = vecs_f32[train_indices]
         index.train(train_vecs)
         index.add(vecs_f32)

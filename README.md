@@ -1,8 +1,10 @@
-# 1rag – Clockify Support CLI v5.1
+# 1rag – Clockify Support CLI v5.2
 
-**Status**: ✅ Production-Ready
-**Version**: 5.1 (Thread-Safe with Performance Optimizations)
+**Status**: 🔨 Under Active Improvement (Audit Improvements In Progress)
+**Version**: 5.2 (Performance & Quality Improvements)
 **Date**: 2025-11-06
+
+> **Note**: Implementing audit recommendations. See [ANALYSIS_REPORT.md](ANALYSIS_REPORT.md) for details.
 
 A local, stateless, closed-book Retrieval-Augmented Generation (RAG) chatbot for Clockify support documentation using Ollama.
 

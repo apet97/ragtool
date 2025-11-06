@@ -91,18 +91,33 @@ class QueryCache:
         self.misses = 0
         self._lock = threading.RLock()  # Thread safety lock
 
-    def _hash_question(self, question: str) -> str:
-        """Generate cache key from question."""
-        return hashlib.md5(question.encode('utf-8')).hexdigest()
+    def _hash_question(self, question: str, params: dict = None) -> str:
+        """Generate cache key from question and retrieval parameters.
 
-    def get(self, question: str):
+        Args:
+            question: User question
+            params: Retrieval parameters (top_k, pack_top, use_rerank, threshold)
+        """
+        if params is None:
+            cache_input = question
+        else:
+            # Sort params for consistent hashing
+            sorted_params = sorted(params.items())
+            cache_input = question + str(sorted_params)
+        return hashlib.md5(cache_input.encode('utf-8')).hexdigest()
+
+    def get(self, question: str, params: dict = None):
         """Retrieve cached answer if available and not expired.
+
+        Args:
+            question: User question
+            params: Retrieval parameters (optional, for cache key)
 
         Returns:
             (answer, metadata) tuple if cache hit, None if cache miss
         """
         with self._lock:
-            key = self._hash_question(question)
+            key = self._hash_question(question, params)
 
             if key not in self.cache:
                 self.misses += 1
@@ -131,16 +146,17 @@ class QueryCache:
             logger.debug(f"[cache] HIT question_hash={key[:8]} age={age:.1f}s")
             return answer, metadata
 
-    def put(self, question: str, answer: str, metadata: dict):
+    def put(self, question: str, answer: str, metadata: dict, params: dict = None):
         """Store answer in cache.
 
         Args:
             question: User question
             answer: Generated answer
             metadata: Answer metadata (selected chunks, scores, etc.)
+            params: Retrieval parameters (optional, for cache key)
         """
         with self._lock:
-            key = self._hash_question(question)
+            key = self._hash_question(question, params)
 
             # Evict oldest entry if cache full
             if len(self.cache) >= self.maxsize and key not in self.cache:
