@@ -71,7 +71,13 @@ CTX_TOKEN_BUDGET = int(os.environ.get("CTX_BUDGET", "2800"))  # ~11,200 chars, o
 
 # ====== EMBEDDINGS BACKEND (v4.1) ======
 EMB_BACKEND = os.environ.get("EMB_BACKEND", "local")  # "local" or "ollama"
-EMB_DIM = 384  # all-MiniLM-L6-v2 dimension
+
+# Embedding dimensions:
+# - local (SentenceTransformer all-MiniLM-L6-v2): 384-dim
+# - ollama (nomic-embed-text): 768-dim
+EMB_DIM_LOCAL = 384
+EMB_DIM_OLLAMA = 768
+EMB_DIM = EMB_DIM_LOCAL if EMB_BACKEND == "local" else EMB_DIM_OLLAMA
 
 # ====== ANN (Approximate Nearest Neighbors) (v4.1) ======
 USE_ANN = os.environ.get("ANN", "faiss")  # "faiss" or "none"
