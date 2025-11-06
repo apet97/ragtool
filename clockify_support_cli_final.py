@@ -105,6 +105,9 @@ RERANK_READ_T = float(os.environ.get("RERANK_READ_TIMEOUT", "180"))
 # Exact refusal string (ASCII quotes only)
 REFUSAL_STR = "I don't know based on the MD."
 
+# Query logging configuration
+QUERY_LOG_FILE = os.environ.get("RAG_LOG_FILE", "rag_queries.jsonl")
+
 FILES = {
     "chunks": "chunks.jsonl",
     "emb": "vecs_n.npy",  # Pre-normalized embeddings (float32)
@@ -1750,6 +1753,43 @@ RATE_LIMITER = RateLimiter(
     window_seconds=int(os.environ.get("RATE_LIMIT_WINDOW", "60"))
 )
 
+# ====== STRUCTURED LOGGING ======
+def log_query(query, answer, retrieved_chunks, latency_ms, refused=False, metadata=None):
+    """Log query with structured JSON format for monitoring and analytics.
+
+    Args:
+        query: User question string
+        answer: Generated answer text
+        retrieved_chunks: List of retrieved chunk dicts with scores
+        latency_ms: Total query latency in milliseconds
+        refused: Whether answer was refused (returned REFUSAL_STR)
+        metadata: Optional dict with additional metadata (debug, backend, etc.)
+    """
+    # Extract chunk IDs and scores
+    chunk_ids = [c["id"] if isinstance(c, dict) else c for c in retrieved_chunks]
+    chunk_scores = [c.get("score", 0.0) if isinstance(c, dict) else 0.0 for c in retrieved_chunks]
+
+    log_entry = {
+        "timestamp": time.time(),
+        "timestamp_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "query": query,
+        "query_length": len(query),
+        "answer_length": len(answer),
+        "num_chunks_retrieved": len(chunk_ids),
+        "chunk_ids": chunk_ids,
+        "avg_chunk_score": float(np.mean(chunk_scores)) if chunk_scores else 0.0,
+        "max_chunk_score": float(np.max(chunk_scores)) if chunk_scores else 0.0,
+        "latency_ms": latency_ms,
+        "refused": refused,
+        "metadata": metadata or {}
+    }
+
+    try:
+        with open(QUERY_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_entry) + "\n")
+    except Exception as e:
+        logger.warning(f"Failed to write query log: {e}")
+
 # ====== ANSWER (STATELESS) ======
 def answer_once(
     question: str,
@@ -1864,6 +1904,18 @@ def answer_once(
             if debug:
                 print(f"\n[DEBUG] Coverage failed: {len(mmr_selected)} selected, need ≥2 @ {threshold}")
             logger.debug(f"[coverage_gate] REJECTED: seed={seed} model={GEN_MODEL} selected={len(mmr_selected)} threshold={threshold}")
+
+            # Log refusal
+            latency_ms = int((time.time() - turn_start) * 1000)
+            log_query(
+                query=question,
+                answer=REFUSAL_STR,
+                retrieved_chunks=mmr_selected,
+                latency_ms=latency_ms,
+                refused=True,
+                metadata={"debug": debug, "backend": EMB_BACKEND, "coverage_pass": False}
+            )
+
             return REFUSAL_STR, {"selected": []}
 
         # Step 5: Pack with token budget and snippet cap (Task C)
@@ -1917,6 +1969,26 @@ def answer_once(
             f"info: retrieve={timings.get('retrieve', 0):.3f} rerank={timings.get('rerank', 0):.3f} "
             f"ask={timings['ask_llm']:.3f} total={timings['total']:.3f} "
             f"selected={len(mmr_selected)} packed={len(ids)} used_tokens={used_tokens}"
+        )
+
+        # Log successful query
+        latency_ms = int(timings['total'] * 1000)
+        log_query(
+            query=question,
+            answer=ans,
+            retrieved_chunks=[{"id": cid, "score": scores["dense"].get(cid, 0.0)} for cid in ids],
+            latency_ms=latency_ms,
+            refused=False,
+            metadata={
+                "debug": debug,
+                "backend": EMB_BACKEND,
+                "coverage_pass": True,
+                "rerank_applied": rerank_applied,
+                "num_selected": len(mmr_selected),
+                "num_packed": len(ids),
+                "used_tokens": used_tokens,
+                "timings": timings
+            }
         )
 
         return ans, {"selected": ids}
