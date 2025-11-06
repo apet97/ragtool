@@ -1,20 +1,22 @@
-.PHONY: help venv install selftest build chat smoke clean test eval typecheck lint format
+.PHONY: help venv install selftest build chat smoke clean test eval typecheck lint format pre-commit-install pre-commit-run
 
 help:
 	@echo "v4.1 Clockify RAG CLI - Make Targets"
 	@echo ""
-	@echo "  make venv       - Create Python virtual environment"
-	@echo "  make install    - Install dependencies (requires venv)"
-	@echo "  make build      - Build knowledge base (uses local embeddings for speed)"
-	@echo "  make selftest   - Run self-test suite"
-	@echo "  make chat       - Start interactive chat (REPL)"
-	@echo "  make smoke      - Run full smoke test suite"
-	@echo "  make test       - Run unit tests with coverage"
-	@echo "  make eval       - Run RAG evaluation on ground truth dataset"
-	@echo "  make typecheck  - Run mypy static type checking"
-	@echo "  make lint       - Run ruff linter"
-	@echo "  make format     - Format code with black"
-	@echo "  make clean      - Remove generated artifacts and cache"
+	@echo "  make venv                - Create Python virtual environment"
+	@echo "  make install             - Install dependencies (requires venv)"
+	@echo "  make build               - Build knowledge base (uses local embeddings for speed)"
+	@echo "  make selftest            - Run self-test suite"
+	@echo "  make chat                - Start interactive chat (REPL)"
+	@echo "  make smoke               - Run full smoke test suite"
+	@echo "  make test                - Run unit tests with coverage"
+	@echo "  make eval                - Run RAG evaluation on ground truth dataset"
+	@echo "  make typecheck           - Run mypy static type checking"
+	@echo "  make lint                - Run ruff linter"
+	@echo "  make format              - Format code with black"
+	@echo "  make pre-commit-install  - Install pre-commit git hooks"
+	@echo "  make pre-commit-run      - Run pre-commit hooks on all files"
+	@echo "  make clean               - Remove generated artifacts and cache"
 	@echo ""
 	@echo "Quick start:"
 	@echo "  make venv && make install && make build && make chat"
@@ -79,6 +81,15 @@ lint:
 format:
 	@echo "Formatting code with black..."
 	python3 -m black clockify_support_cli_final.py --config pyproject.toml
+
+pre-commit-install:
+	@echo "Installing pre-commit hooks..."
+	python3 -m pre_commit install
+	@echo "✅ Pre-commit hooks installed"
+
+pre-commit-run:
+	@echo "Running pre-commit hooks on all files..."
+	python3 -m pre_commit run --all-files
 
 clean:
 	@echo "Cleaning generated artifacts..."

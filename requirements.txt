@@ -30,3 +30,4 @@ black==24.1.1
 pylint==3.0.3
 mypy==1.13.0  # Static type checking
 ruff==0.8.4  # Fast Python linter
+pre-commit==4.0.1  # Git pre-commit hooks
