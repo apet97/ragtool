@@ -2583,6 +2583,11 @@ def answer_once(
 
         # Step 4: Coverage check
         coverage_pass = coverage_ok(mmr_selected, scores["dense"], threshold)
+        chunk_id_to_index = {
+            chunk.get("id"): idx
+            for idx, chunk in enumerate(chunks)
+            if isinstance(chunk, dict) and "id" in chunk
+        }
         if not coverage_pass:
             if debug:
                 print(f"\n[DEBUG] Coverage failed: {len(mmr_selected)} selected, need ≥2 @ {threshold}")
@@ -2590,10 +2595,31 @@ def answer_once(
 
             # Log refusal
             latency_ms = int((time.time() - turn_start) * 1000)
+            dense_scores = scores.get("dense", np.zeros(len(chunks), dtype=np.float32))
+            retrieved_chunks = []
+            for idx in mmr_selected:
+                if not isinstance(idx, (int, np.integer)):
+                    continue
+                if idx < 0 or idx >= len(chunks) or idx >= len(dense_scores):
+                    continue
+                chunk = chunks[idx]
+                if not isinstance(chunk, dict):
+                    continue
+                chunk_id = chunk.get("id")
+                if chunk_id is None:
+                    continue
+                retrieved_chunks.append(
+                    {
+                        "id": chunk_id,
+                        "score": float(dense_scores[idx]),
+                        "chunk": chunk,
+                    }
+                )
+
             log_query(
                 query=question,
                 answer=REFUSAL_STR,
-                retrieved_chunks=mmr_selected,
+                retrieved_chunks=retrieved_chunks,
                 latency_ms=latency_ms,
                 refused=True,
                 metadata={"debug": debug, "backend": EMB_BACKEND, "coverage_pass": False}
@@ -2662,14 +2688,22 @@ def answer_once(
 
         # Log successful query
         latency_ms = int(timings['total'] * 1000)
-        chunk_id_to_index = {chunk["id"]: idx for idx, chunk in enumerate(chunks)}
         dense_scores = scores["dense"]
-        retrieved_chunks = [
-            {"id": cid, "score": float(dense_scores[idx])}
-            for cid in ids
-            for idx in [chunk_id_to_index.get(cid)]
-            if idx is not None and 0 <= idx < len(dense_scores)
-        ]
+        retrieved_chunks = []
+        for cid in ids:
+            idx = chunk_id_to_index.get(cid)
+            if idx is None or idx < 0 or idx >= len(chunks) or idx >= len(dense_scores):
+                continue
+            chunk = chunks[idx]
+            if not isinstance(chunk, dict):
+                continue
+            retrieved_chunks.append(
+                {
+                    "id": cid,
+                    "score": float(dense_scores[idx]),
+                    "chunk": chunk,
+                }
+            )
 
         log_query(
             query=question,
