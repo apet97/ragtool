@@ -43,7 +43,7 @@ import threading
 import time
 import unicodedata
 import uuid
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from contextlib import contextmanager
 
 # Third-party imports
@@ -1578,13 +1578,6 @@ def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0) 
             dense_scores_full[remaining_idx] = vecs_n[remaining_idx].dot(qv_n)
             dot_elapsed = time.perf_counter() - dot_start
             dense_computed = int(remaining_idx.size)
-            max(ANN_CANDIDATE_MIN, top_k * FAISS_CANDIDATE_MULTIPLIER)
-        )
-        distances = np.asarray(D[0], dtype="float32")
-        indices = np.asarray(I[0], dtype=np.int64)
-        mask = indices >= 0
-        candidate_idx = indices[mask].astype(int).tolist()
-        dense_scores = distances[mask]
     # Fallback to HNSW if available
     elif hnsw:
         _, cand = hnsw.knn_query(qv_n, k=max(ANN_CANDIDATE_MIN, top_k * FAISS_CANDIDATE_MULTIPLIER))
@@ -2353,13 +2346,6 @@ class QueryCache:
 
             answer, metadata, timestamp = self.cache[key]
             age = time.time() - timestamp
-        answer, metadata, timestamp = self.cache[key]
-        metadata_timestamp = metadata.get("timestamp")
-        if metadata_timestamp is None:
-            metadata_timestamp = timestamp
-            metadata["timestamp"] = metadata_timestamp
-
-        age = time.time() - metadata_timestamp
 
             # Check if expired
             if age > self.ttl_seconds:
@@ -2392,13 +2378,11 @@ class QueryCache:
                 del self.cache[oldest]
                 logger.debug(f"[cache] EVICT question_hash={oldest[:8]} (LRU)")
 
-            # Store entry with timestamp
-            self.cache[key] = (answer, metadata, time.time())
-        # Store entry with timestamp
-        timestamp = time.time()
-        metadata = dict(metadata) if metadata is not None else {}
-        metadata["timestamp"] = timestamp
-        self.cache[key] = (answer, metadata, timestamp)
+            # Store entry with timestamp (single write with metadata augmentation)
+            timestamp = time.time()
+            metadata_copy = dict(metadata) if metadata is not None else {}
+            metadata_copy["timestamp"] = timestamp
+            self.cache[key] = (answer, metadata_copy, timestamp)
 
             # Update access order
             if key in self.access_order:
@@ -2812,7 +2796,6 @@ def answer_once(
                 query=question,
                 answer=REFUSAL_STR,
                 retrieved_chunks=refusal_chunks,
-                retrieved_chunks=retrieved_chunks,
                 latency_ms=latency_ms,
                 refused=True,
                 metadata={"debug": debug, "backend": EMB_BACKEND, "coverage_pass": False}
@@ -3271,14 +3254,6 @@ def ensure_index_ready(retries=0):
     return result
 
 # ====== REPL ======
-            raise SystemExit(1)
-
-    if result is None:
-        logger.error("Failed to load artifacts after rebuild")
-        raise SystemExit(1)
-
-    return result
-
 
 def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=False, seed=DEFAULT_SEED, num_ctx=DEFAULT_NUM_CTX, num_predict=DEFAULT_NUM_PREDICT, retries=0, use_json=False):
     """Stateless REPL loop - Task I. v4.1: JSON output support."""
