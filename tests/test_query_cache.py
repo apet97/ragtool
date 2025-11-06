@@ -28,7 +28,7 @@ class TestQueryCache:
         """Test that second access with same question is a cache hit."""
         question = "What is Clockify?"
         answer = "Clockify is a time tracking tool."
-        metadata = {"selected": [1, 2, 3]}
+        metadata = {"selected": [1, 2, 3], "timestamp": time.time()}
 
         # First access: miss, then put
         self.cache.get(question)  # miss
@@ -40,6 +40,8 @@ class TestQueryCache:
         cached_answer, cached_metadata = result
         assert cached_answer == answer
         assert cached_metadata == metadata
+        assert "timestamp" in cached_metadata
+        assert cached_metadata["timestamp"] == pytest.approx(metadata["timestamp"], abs=0.01)
         assert self.cache.stats()["hits"] == 1
         assert self.cache.stats()["misses"] == 1
 
@@ -47,7 +49,7 @@ class TestQueryCache:
         """Test that cache entries expire after TTL."""
         question = "What is Clockify?"
         answer = "Clockify is a time tracking tool."
-        metadata = {"selected": [1, 2, 3]}
+        metadata = {"selected": [1, 2, 3], "timestamp": time.time()}
 
         # Put entry in cache
         self.cache.put(question, answer, metadata)
@@ -67,13 +69,13 @@ class TestQueryCache:
     def test_lru_eviction(self):
         """Test that LRU eviction works when cache is full."""
         # Fill cache to capacity (maxsize=3)
-        self.cache.put("q1", "a1", {})
-        self.cache.put("q2", "a2", {})
-        self.cache.put("q3", "a3", {})
+        self.cache.put("q1", "a1", {"timestamp": time.time()})
+        self.cache.put("q2", "a2", {"timestamp": time.time()})
+        self.cache.put("q3", "a3", {"timestamp": time.time()})
         assert self.cache.stats()["size"] == 3
 
         # Add one more: should evict oldest (q1)
-        self.cache.put("q4", "a4", {})
+        self.cache.put("q4", "a4", {"timestamp": time.time()})
         assert self.cache.stats()["size"] == 3
 
         # q1 should be evicted
@@ -88,15 +90,15 @@ class TestQueryCache:
     def test_lru_access_updates_order(self):
         """Test that accessing an entry updates its LRU position."""
         # Fill cache
-        self.cache.put("q1", "a1", {})
-        self.cache.put("q2", "a2", {})
-        self.cache.put("q3", "a3", {})
+        self.cache.put("q1", "a1", {"timestamp": time.time()})
+        self.cache.put("q2", "a2", {"timestamp": time.time()})
+        self.cache.put("q3", "a3", {"timestamp": time.time()})
 
         # Access q1 to move it to end of LRU
         self.cache.get("q1")
 
         # Add q4: should evict q2 (oldest unaccessed)
-        self.cache.put("q4", "a4", {})
+        self.cache.put("q4", "a4", {"timestamp": time.time()})
 
         # q1 should still be in cache (was accessed)
         assert self.cache.get("q1") is not None
@@ -106,8 +108,8 @@ class TestQueryCache:
 
     def test_clear_resets_cache(self):
         """Test that clear() removes all entries and resets stats."""
-        self.cache.put("q1", "a1", {})
-        self.cache.put("q2", "a2", {})
+        self.cache.put("q1", "a1", {"timestamp": time.time()})
+        self.cache.put("q2", "a2", {"timestamp": time.time()})
         self.cache.get("q1")  # hit
         self.cache.get("q3")  # miss
 
@@ -123,7 +125,7 @@ class TestQueryCache:
 
     def test_stats_hit_rate(self):
         """Test that hit_rate is calculated correctly."""
-        self.cache.put("q1", "a1", {})
+        self.cache.put("q1", "a1", {"timestamp": time.time()})
 
         # 1 hit, 1 miss -> 50% hit rate
         self.cache.get("q1")  # hit
@@ -143,8 +145,9 @@ class TestQueryCache:
         """Test that putting same question twice updates entry."""
         question = "What is Clockify?"
 
-        self.cache.put(question, "answer1", {"v": 1})
-        self.cache.put(question, "answer2", {"v": 2})
+        self.cache.put(question, "answer1", {"v": 1, "timestamp": time.time()})
+        time.sleep(0.01)
+        self.cache.put(question, "answer2", {"v": 2, "timestamp": time.time()})
 
         # Should only have 1 entry (updated)
         assert self.cache.stats()["size"] == 1
@@ -158,7 +161,7 @@ class TestQueryCache:
     def test_cache_hash_consistency(self):
         """Test that same question produces same hash."""
         question = "What is Clockify?"
-        self.cache.put(question, "answer", {})
+        self.cache.put(question, "answer", {"timestamp": time.time()})
 
         # Same question should hit cache
         result = self.cache.get(question)
@@ -166,8 +169,8 @@ class TestQueryCache:
 
     def test_cache_case_sensitive(self):
         """Test that cache is case-sensitive."""
-        self.cache.put("What is Clockify?", "answer1", {})
-        self.cache.put("what is clockify?", "answer2", {})
+        self.cache.put("What is Clockify?", "answer1", {"timestamp": time.time()})
+        self.cache.put("what is clockify?", "answer2", {"timestamp": time.time()})
 
         # Should be two separate entries
         assert self.cache.stats()["size"] == 2
@@ -177,6 +180,24 @@ class TestQueryCache:
 
         assert result1[0] == "answer1"
         assert result2[0] == "answer2"
+
+    def test_metadata_timestamp_age_progresses(self):
+        """Metadata should expose timestamp for age calculations."""
+        question = "How old is the cache entry?"
+        metadata = {"selected": [], "timestamp": time.time()}
+        self.cache.put(question, "age-answer", metadata)
+
+        time.sleep(0.2)
+
+        result = self.cache.get(question)
+        assert result is not None
+        _, cached_metadata = result
+        assert "timestamp" in cached_metadata
+
+        age = time.time() - cached_metadata["timestamp"]
+        assert age >= 0.2
+        # TTL is 1 second, so the entry should still be valid and age less than TTL
+        assert age < 1.0
 
 
 if __name__ == "__main__":

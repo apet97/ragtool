@@ -2462,12 +2462,17 @@ def answer_once(
     # Check query cache (Rank 14: 100% speedup on repeated queries)
     cached_result = QUERY_CACHE.get(question)
     if cached_result is not None:
-        answer, metadata = cached_result
-        # Add cache indicator to metadata
+        answer, cached_metadata = cached_result
+        # Work on a copy so cached metadata (including timestamp) remains intact
+        metadata = dict(cached_metadata) if cached_metadata is not None else {}
         metadata["cached"] = True
         metadata["cache_hit"] = True
         # Quick Win #9: Add cache hit logging
-        cache_age = time.time() - metadata.get("timestamp", time.time())
+        timestamp = metadata.get("timestamp")
+        if timestamp is None:
+            timestamp = time.time()
+            metadata["timestamp"] = timestamp
+        cache_age = time.time() - timestamp
         logger.info(f"[cache] HIT question_len={len(question)} cache_age={cache_age:.1f}s")
         return answer, metadata
 
@@ -2508,6 +2513,7 @@ def answer_once(
 
             # Cache refusal (Rank 14)
             refusal_metadata = {"selected": [], "refused": True, "cached": False, "cache_hit": False}
+            refusal_metadata["timestamp"] = time.time()
             QUERY_CACHE.put(question, REFUSAL_STR, refusal_metadata)
 
             return REFUSAL_STR, refusal_metadata
@@ -2594,6 +2600,7 @@ def answer_once(
             "cache_hit": False,
             "confidence": confidence
         }
+        result_metadata["timestamp"] = time.time()
         QUERY_CACHE.put(question, ans, result_metadata)
 
         return ans, result_metadata
