@@ -2,7 +2,7 @@ name: Lint
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [ main, master, develop, 'claude/**' ]  # Allow claude/* branches
   pull_request:
     branches: [ main, master, develop ]
 
@@ -24,7 +24,9 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        # Install only linting tools, not full requirements.txt
+        pip install mypy==1.13.0 ruff==0.8.4 black==24.1.1
+        pip install numpy==2.3.4 requests==2.32.5  # For type checking imports
 
     - name: Run ruff linter
       run: |
