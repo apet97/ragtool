@@ -148,13 +148,12 @@ def build_lock():
             # Still held by live process; wait and retry with 250 ms polling
             if time.time() > deadline:
                 raise RuntimeError("Build already in progress; timed out waiting for lock release")
-            end = time.time() + 10.0
-            while time.time() < end:
+            while time.time() < deadline:  # Use deadline directly
                 time.sleep(0.25)
                 if not os.path.exists(BUILD_LOCK):
                     break
-            else:
-                raise RuntimeError("Build already in progress; timed out waiting for lock release")
+                if time.time() > deadline:  # Check deadline in loop
+                    raise RuntimeError("Build already in progress; timed out waiting for lock release")
             continue
 
     try:

@@ -38,6 +38,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
 import uuid
@@ -283,6 +284,7 @@ def embed_local_batch(texts: list, normalize: bool = True) -> np.ndarray:
 
 # ====== FAISS ANN INDEX (v4.1 - Section 3) ======
 _FAISS_INDEX = None
+_FAISS_LOCK = threading.Lock()
 
 def _try_load_faiss():
     """Try importing FAISS; returns None if not available."""
@@ -371,16 +373,27 @@ def save_faiss_index(index, path: str | None = None):
         logger.debug(f"Saved FAISS index to {path}")
 
 def load_faiss_index(path: str | None = None) -> object | None:
-    """Load FAISS index from disk."""
+    """Load FAISS index from disk with thread-safe lazy loading."""
+    global _FAISS_INDEX
+
     if path is None or not os.path.exists(path):
         return None
-    faiss = _try_load_faiss()
-    if faiss:
-        index = faiss.read_index(path)
-        index.nprobe = ANN_NPROBE
-        logger.debug(f"Loaded FAISS index from {path}")
-        return index
-    return None
+
+    # Double-checked locking pattern for thread safety
+    if _FAISS_INDEX is not None:
+        return _FAISS_INDEX
+
+    with _FAISS_LOCK:
+        if _FAISS_INDEX is not None:  # Check again inside lock
+            return _FAISS_INDEX
+
+        faiss = _try_load_faiss()
+        if faiss:
+            _FAISS_INDEX = faiss.read_index(path)
+            _FAISS_INDEX.nprobe = ANN_NPROBE
+            logger.debug(f"Loaded FAISS index from {path}")
+            return _FAISS_INDEX
+        return None
 
 # ====== HYBRID SCORING (v4.1 - Section 4) ======
 def normalize_scores(scores: list) -> list:
@@ -582,13 +595,12 @@ def build_lock():
             # Still held by live process; wait and retry with 250 ms polling
             if time.time() > deadline:
                 raise RuntimeError("Build already in progress; timed out waiting for lock release")
-            end = time.time() + 10.0
-            while time.time() < end:
+            while time.time() < deadline:  # Use deadline directly
                 time.sleep(0.25)
                 if not os.path.exists(BUILD_LOCK):
                     break
-            else:
-                raise RuntimeError("Build already in progress; timed out waiting for lock release")
+                if time.time() > deadline:  # Check deadline in loop
+                    raise RuntimeError("Build already in progress; timed out waiting for lock release")
             continue
 
     try:
@@ -974,12 +986,14 @@ def sliding_chunks(text: str, maxc=CHUNK_CHARS, overlap=CHUNK_OVERLAP):
                         current_chunk = []
                         current_len = 0
 
-                    # Split long sentence by characters
+                    # Split long sentence by characters with consistent overlap
                     i = 0
                     while i < sent_len:
                         j = min(i + maxc, sent_len)
                         out.append(sent[i:j].strip())
-                        i = j - overlap if j < sent_len else j
+                        if j >= sent_len:
+                            break
+                        i = j - overlap if overlap < j else 0  # FIXED: respect overlap
                     continue
 
                 # Check if adding this sentence exceeds maxc
@@ -1152,14 +1166,17 @@ def embed_texts(texts, retries=0):
                 raise EmbeddingError(f"Embedding chunk {i}: empty embedding returned (check Ollama API format)")
 
             vecs.append(emb)
+        except EmbeddingError:
+            raise  # Re-raise our own errors as-is
         except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
             raise EmbeddingError(f"Embedding chunk {i} failed: {e} [hint: check OLLAMA_URL or increase EMB timeouts]") from e
         except requests.exceptions.RequestException as e:
             raise EmbeddingError(f"Embedding chunk {i} request failed: {e}") from e
-        except EmbeddingError:
-            raise  # Re-raise EmbeddingError
+        except (KeyError, IndexError, TypeError) as e:  # SPECIFIC errors
+            raise EmbeddingError(f"Embedding chunk {i}: invalid response format: {e}") from e
         except Exception as e:
-            raise EmbeddingError(f"Embedding chunk {i}: {e}") from e
+            logger.error(f"Unexpected error in embed_texts chunk {i}: {e}", exc_info=True)
+            raise  # Let unexpected errors propagate
 
     return np.array(vecs, dtype="float32")
 
@@ -1288,7 +1305,7 @@ def normalize_scores_zscore(arr):
         return a
     m, s = a.mean(), a.std()
     if s == 0:
-        return np.zeros_like(a)
+        return a  # FIXED: preserve original when no variance
     return (a - m) / s
 
 # ====== QUERY EXPANSION (Rank 13) ======

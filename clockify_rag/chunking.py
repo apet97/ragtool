@@ -100,12 +100,14 @@ def sliding_chunks(text: str, maxc: int = None, overlap: int = None) -> list:
                         current_chunk = []
                         current_len = 0
 
-                    # Split long sentence by characters
+                    # Split long sentence by characters with consistent overlap
                     i = 0
                     while i < sent_len:
                         j = min(i + maxc, sent_len)
                         out.append(sent[i:j].strip())
-                        i = j - overlap if j < sent_len else j
+                        if j >= sent_len:
+                            break
+                        i = j - overlap if overlap < j else 0  # FIXED: respect overlap
                     continue
 
                 # Check if adding this sentence exceeds maxc

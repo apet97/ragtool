@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import platform
+import threading
 import time
 from collections import Counter
 
@@ -22,8 +23,9 @@ from .utils import (build_lock, atomic_write_jsonl, atomic_save_npy, atomic_writ
 
 logger = logging.getLogger(__name__)
 
-# Global FAISS index
+# Global FAISS index with thread safety
 _FAISS_INDEX = None
+_FAISS_LOCK = threading.Lock()
 
 
 def _try_load_faiss():
@@ -109,16 +111,27 @@ def save_faiss_index(index, path: str = None):
 
 
 def load_faiss_index(path: str = None):
-    """Load FAISS index from disk."""
+    """Load FAISS index from disk with thread-safe lazy loading."""
+    global _FAISS_INDEX
+
     if path is None or not os.path.exists(path):
         return None
-    faiss = _try_load_faiss()
-    if faiss:
-        index = faiss.read_index(path)
-        index.nprobe = ANN_NPROBE
-        logger.debug(f"Loaded FAISS index from {path}")
-        return index
-    return None
+
+    # Double-checked locking pattern for thread safety
+    if _FAISS_INDEX is not None:
+        return _FAISS_INDEX
+
+    with _FAISS_LOCK:
+        if _FAISS_INDEX is not None:  # Check again inside lock
+            return _FAISS_INDEX
+
+        faiss = _try_load_faiss()
+        if faiss:
+            _FAISS_INDEX = faiss.read_index(path)
+            _FAISS_INDEX.nprobe = ANN_NPROBE
+            logger.debug(f"Loaded FAISS index from {path}")
+            return _FAISS_INDEX
+        return None
 
 
 # ====== BM25 ======
