@@ -232,6 +232,35 @@ system_message = (
 )
 ```
 
+## Dataset Regeneration
+
+When refreshing evaluation datasets after rerunning the chunk builder:
+
+1. Regenerate chunk metadata and produce a title → chunk index:
+
+   ```bash
+   python clockify_rag/chunking/build_chunks.py  # existing chunk build step
+   ./scripts/generate_chunk_title_map.py         # writes chunk_title_map.json
+   ```
+
+   The helper script parses `chunks.jsonl` and outputs `chunk_title_map.json` so you can quickly search for chunks that mention a topic or article title.
+
+2. Update `eval_dataset.jsonl` and `eval_datasets/clockify_v1.jsonl` so every query references at least one relevant UUID.
+
+   ```bash
+   # manually edit the JSONL files with the UUIDs surfaced in chunk_title_map.json
+   # ensure no query is left with an empty relevant_chunk_ids list
+   ```
+
+3. Rebuild the knowledge base artifacts and run the evaluation suite to confirm the new UUIDs work end-to-end:
+
+   ```bash
+   make build     # refresh embeddings so eval.py can read the knowledge base
+   python eval.py
+   ```
+
+   Running `python eval.py` without rebuilding first results in the "Knowledge base not built" error.
+
 ## Limitations & Future Improvements
 
 - **Fixed Chunk Size**: Currently uses fixed 1600-char chunks; could use dynamic sizing based on semantic boundaries
