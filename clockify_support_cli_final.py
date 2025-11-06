@@ -152,6 +152,7 @@ REFUSAL_STR = "I don't know based on the MD."
 
 # Query logging configuration
 QUERY_LOG_FILE = os.environ.get("RAG_LOG_FILE", "rag_queries.jsonl")
+QUERY_LOG_DISABLED = os.environ.get("RAG_NO_LOG", "").lower() in {"1", "true", "yes", "on"}
 
 FILES = {
     "chunks": "chunks.jsonl",
@@ -703,11 +704,13 @@ def check_pytorch_mps():
 def _log_config_summary(use_rerank=False, pack_top=DEFAULT_PACK_TOP, seed=DEFAULT_SEED, threshold=DEFAULT_THRESHOLD, top_k=DEFAULT_TOP_K, num_ctx=DEFAULT_NUM_CTX, num_predict=DEFAULT_NUM_PREDICT, retries=0):
     """Log configuration summary at startup - Task I."""
     proxy_trust = 1 if os.getenv("ALLOW_PROXIES") == "1" else 0
+    log_target = "off" if QUERY_LOG_DISABLED else pathlib.Path(QUERY_LOG_FILE).resolve()
     # Task I: Single-line CONFIG banner
     logger.info(
         f"CONFIG model={GEN_MODEL} emb={EMB_MODEL} topk={top_k} pack={pack_top} thr={threshold} "
         f"seed={seed} ctx={num_ctx} pred={num_predict} retries={retries} "
         f"timeouts=(3,{int(EMB_READ_T)}/{int(CHAT_READ_T)}/{int(RERANK_READ_T)}) "
+        f"log={log_target} "
         f"trust_env={proxy_trust} rerank={1 if use_rerank else 0}"
     )
     # Task I: Print refusal string once for sanity
@@ -2324,6 +2327,9 @@ def log_query(query, answer, retrieved_chunks, latency_ms, refused=False, metada
         refused: Whether answer was refused (returned REFUSAL_STR)
         metadata: Optional dict with additional metadata (debug, backend, etc.)
     """
+    if QUERY_LOG_DISABLED:
+        return
+
     # Extract chunk IDs and scores
     chunk_ids = [c["id"] if isinstance(c, dict) else c for c in retrieved_chunks]
     chunk_scores = [c.get("score", 0.0) if isinstance(c, dict) else 0.0 for c in retrieved_chunks]
@@ -3000,7 +3006,7 @@ def warmup_on_startup():
 # ====== MAIN ======
 def main():
     # v4.1: Declare globals at function start (Section 7)
-    global EMB_BACKEND, USE_ANN, ALPHA_HYBRID
+    global EMB_BACKEND, USE_ANN, ALPHA_HYBRID, QUERY_LOG_DISABLED
 
     ap = argparse.ArgumentParser(
         prog="clockify_support_cli",
@@ -3010,6 +3016,8 @@ def main():
     # Global logging and config arguments
     ap.add_argument("--log", default="INFO", choices=["DEBUG", "INFO", "WARN"],
                     help="Logging level (default INFO)")
+    ap.add_argument("--no-log", action="store_true",
+                    help="Disable query log file writes (privacy mode)")
     ap.add_argument("--ollama-url", type=str, default=None,
                     help="Ollama endpoint (default from OLLAMA_URL env or http://127.0.0.1:11434)")
     ap.add_argument("--gen-model", type=str, default=None,
@@ -3069,6 +3077,9 @@ def main():
     # Setup logging after CLI arg parsing
     level = getattr(logging, args.log if hasattr(args, "log") else "INFO")
     logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
+
+    if getattr(args, "no_log", False):
+        QUERY_LOG_DISABLED = True
 
     # v4.1: Update globals from CLI args (Section 7)
     EMB_BACKEND = args.emb_backend

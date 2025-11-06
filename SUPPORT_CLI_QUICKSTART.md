@@ -40,6 +40,10 @@ BUILDING KNOWLEDGE BASE
 ### 3. Start Chat
 ```bash
 python3 clockify_support_cli.py chat
+
+# Privacy mode: skip writing query logs
+python3 clockify_support_cli.py chat --no-log
+# Or set an env var before launch: export RAG_NO_LOG=1
 ```
 
 ### 4. Ask Questions
