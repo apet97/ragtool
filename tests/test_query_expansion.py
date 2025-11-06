@@ -1,12 +1,30 @@
 """Tests for query expansion functionality."""
-import pytest
-import sys
+import json
 import os
+import sys
+
+import pytest
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from clockify_support_cli_final import expand_query
+from clockify_support_cli_final import (
+    QUERY_EXPANSIONS_ENV_VAR,
+    expand_query,
+    load_query_expansion_dict,
+    reset_query_expansion_cache,
+    set_query_expansion_path,
+)
+
+
+@pytest.fixture(autouse=True)
+def restore_query_expansions():
+    """Ensure each test starts with the default query expansion config."""
+    set_query_expansion_path(None)
+    reset_query_expansion_cache()
+    yield
+    set_query_expansion_path(None)
+    reset_query_expansion_cache()
 
 
 class TestQueryExpansion:
@@ -98,6 +116,39 @@ class TestQueryExpansion:
 
         # Original should be the first part
         assert expanded.startswith(query)
+
+    def test_expand_query_uses_cli_override(self, tmp_path):
+        """Query expansion honors CLI-style override via setter."""
+        override_path = tmp_path / "custom_expansions.json"
+        override_path.write_text(json.dumps({"support": ["helpdesk"]}))
+
+        set_query_expansion_path(str(override_path))
+        load_query_expansion_dict(force_reload=True, suppress_errors=False)
+
+        expanded = expand_query("support ticket")
+        assert "helpdesk" in expanded
+
+    def test_expand_query_uses_env_override(self, tmp_path, monkeypatch):
+        """Query expansion honors environment variable override."""
+        override_path = tmp_path / "env_expansions.json"
+        override_path.write_text(json.dumps({"timer": ["chronometer"]}))
+
+        monkeypatch.setenv(QUERY_EXPANSIONS_ENV_VAR, str(override_path))
+        reset_query_expansion_cache()
+        set_query_expansion_path(None)
+
+        expanded = expand_query("Start the timer")
+        assert "chronometer" in expanded
+
+    def test_invalid_override_raises_when_validation_requested(self, tmp_path):
+        """Force reload raises when suppress_errors is False for invalid configs."""
+        bad_path = tmp_path / "bad.json"
+        bad_path.write_text("not valid json")
+
+        set_query_expansion_path(str(bad_path))
+
+        with pytest.raises(ValueError):
+            load_query_expansion_dict(force_reload=True, suppress_errors=False)
 
 
 if __name__ == "__main__":

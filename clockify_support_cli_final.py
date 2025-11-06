@@ -171,6 +171,87 @@ FILES = {
 BUILD_LOCK = ".build.lock"
 BUILD_LOCK_TTL_SEC = int(os.environ.get("BUILD_LOCK_TTL_SEC", "900"))  # Task D: 15 minutes default
 
+QUERY_EXPANSIONS_ENV_VAR = "CLOCKIFY_QUERY_EXPANSIONS"
+_DEFAULT_QUERY_EXPANSION_PATH = pathlib.Path(__file__).resolve().parent / "config" / "query_expansions.json"
+_query_expansion_cache = None
+_query_expansion_override = None
+
+def set_query_expansion_path(path):
+    """Override the query expansion configuration file path."""
+    global _query_expansion_override
+    if path is None:
+        _query_expansion_override = None
+    else:
+        _query_expansion_override = pathlib.Path(path)
+    reset_query_expansion_cache()
+
+def reset_query_expansion_cache():
+    """Clear cached query expansion data (useful for tests)."""
+    global _query_expansion_cache
+    _query_expansion_cache = None
+
+def _resolve_query_expansion_path():
+    if _query_expansion_override is not None:
+        return _query_expansion_override
+    env_path = os.environ.get(QUERY_EXPANSIONS_ENV_VAR)
+    if env_path:
+        return pathlib.Path(env_path)
+    return _DEFAULT_QUERY_EXPANSION_PATH
+
+def _read_query_expansion_file(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError as exc:
+        raise ValueError(f"Query expansion file not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in query expansion file {path}: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"Unable to read query expansion file {path}: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Query expansion config must be a JSON object (file: {path})")
+
+    normalized = {}
+    for term, synonyms in data.items():
+        if not isinstance(term, str):
+            raise ValueError(f"Query expansion terms must be strings (file: {path})")
+        if not isinstance(synonyms, list):
+            raise ValueError(f"Query expansion entry for '{term}' must be a list (file: {path})")
+
+        cleaned = []
+        for syn in synonyms:
+            syn_str = syn if isinstance(syn, str) else str(syn)
+            syn_str = syn_str.strip()
+            if syn_str:
+                cleaned.append(syn_str)
+
+        if cleaned:
+            normalized[term.lower()] = cleaned
+
+    return normalized
+
+def load_query_expansion_dict(force_reload=False, suppress_errors=True):
+    """Load query expansion dictionary from disk with optional caching."""
+    global _query_expansion_cache
+
+    if _query_expansion_cache is not None and not force_reload:
+        return _query_expansion_cache
+
+    path = _resolve_query_expansion_path()
+
+    try:
+        expansions = _read_query_expansion_file(path)
+    except ValueError as exc:
+        if suppress_errors:
+            logger.error("Query expansion disabled: %s", exc)
+            _query_expansion_cache = {}
+            return _query_expansion_cache
+        raise
+
+    _query_expansion_cache = expansions
+    return _query_expansion_cache
+
 # ====== CLEANUP HANDLERS ======
 def _release_lock_if_owner():
     """Release build lock on exit if held by this process - Task D."""
@@ -1331,52 +1412,6 @@ def normalize_scores_zscore(arr):
     return (a - m) / s
 
 # ====== QUERY EXPANSION (Rank 13) ======
-# Domain-specific synonyms and acronyms for Clockify terminology
-QUERY_EXPANSION_DICT = {
-    # Time tracking actions
-    "track": ["log", "record", "enter", "add"],
-    "tracking": ["logging", "recording"],
-    "timer": ["stopwatch", "clock"],
-
-    # Time units
-    "time": ["hours", "duration"],
-    "hour": ["hr", "hours"],
-    "minute": ["min", "minutes"],
-
-    # Features
-    "report": ["summary", "analytics", "export"],
-    "reports": ["summaries", "analytics"],
-    "project": ["workspace", "client"],
-    "projects": ["workspaces", "clients"],
-    "task": ["activity", "assignment"],
-    "tasks": ["activities", "assignments"],
-    "tag": ["label", "category"],
-    "tags": ["labels", "categories"],
-    "invoice": ["bill", "billing"],
-    "timesheet": ["time sheet", "time log"],
-
-    # User management
-    "member": ["user", "teammate", "employee"],
-    "members": ["users", "teammates", "employees"],
-    "invite": ["add", "onboard"],
-
-    # Billing
-    "billable": ["chargeable", "invoiceable"],
-    "rate": ["price", "cost"],
-    "price": ["cost", "rate", "pricing"],
-    "pricing": ["plans", "cost", "subscription"],
-
-    # Acronyms
-    "sso": ["single sign-on", "single sign on"],
-    "api": ["application programming interface", "integration"],
-    "csv": ["comma separated values", "spreadsheet"],
-    "pdf": ["portable document format", "document"],
-
-    # Mobile
-    "mobile": ["phone", "smartphone", "app"],
-    "offline": ["no internet", "no connection"],
-}
-
 def expand_query(question: str) -> str:
     """Expand query with domain-specific synonyms and acronyms.
 
@@ -1386,11 +1421,12 @@ def expand_query(question: str) -> str:
     if not question:
         return question
 
+    expansions = load_query_expansion_dict()
     q_lower = question.lower()
     expanded_terms = set()
 
     # Find matching terms and add their synonyms
-    for term, synonyms in QUERY_EXPANSION_DICT.items():
+    for term, synonyms in expansions.items():
         # Check for whole word matches (avoid partial matches like "track" in "attraction")
         if re.search(r'\b' + re.escape(term) + r'\b', q_lower):
             expanded_terms.update(synonyms)
@@ -3206,6 +3242,8 @@ def main():
                     help="Embedding model name (default from EMB_MODEL env or nomic-embed-text)")
     ap.add_argument("--ctx-budget", type=int, default=None,
                     help="Context token budget (default from CTX_BUDGET env or 2800)")
+    ap.add_argument("--query-expansions", type=str, default=None,
+                    help="Path to JSON query expansion overrides (default config/query_expansions.json or CLOCKIFY_QUERY_EXPANSIONS env)")
 
     subparsers = ap.add_subparsers(dest="cmd")
 
@@ -3277,6 +3315,19 @@ def main():
     level = getattr(logging, args.log if hasattr(args, "log") else "INFO")
     logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
 
+    # Configure query expansion dictionary overrides
+    if getattr(args, "query_expansions", None):
+        set_query_expansion_path(args.query_expansions)
+    elif os.environ.get(QUERY_EXPANSIONS_ENV_VAR):
+        set_query_expansion_path(os.environ[QUERY_EXPANSIONS_ENV_VAR])
+    else:
+        set_query_expansion_path(None)
+
+    try:
+        load_query_expansion_dict(force_reload=True, suppress_errors=False)
+    except ValueError as exc:
+        logger.error("CONFIG ERROR: %s", exc)
+        sys.exit(1)
     if getattr(args, "no_log", False):
         QUERY_LOG_DISABLED = True
 

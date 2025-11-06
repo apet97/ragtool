@@ -208,6 +208,35 @@ export GEN_MODEL="qwen2.5:32b"
 export EMB_MODEL="nomic-embed-text"
 ```
 
+### Query Expansion Overrides (Domain Synonyms)
+
+Query expansion terms now live in `config/query_expansions.json`. The file is a JSON object where each key is a lower-case term and each value is a list of synonyms that should be appended to the BM25 query.
+
+```json
+{
+  "track": ["log", "record", "enter", "add"],
+  "offline": ["no internet", "no connection"]
+}
+```
+
+**How to override:**
+
+* **CLI flag** – pass a path to a custom JSON file when launching the tool:
+
+  ```bash
+  python3 clockify_support_cli_final.py chat --query-expansions /path/to/team_expansions.json
+  ```
+
+* **Environment variable** – point `CLOCKIFY_QUERY_EXPANSIONS` to your JSON file:
+
+  ```bash
+  export CLOCKIFY_QUERY_EXPANSIONS=/path/to/team_expansions.json
+  python3 clockify_support_cli_final.py chat
+  ```
+
+Each launch validates the JSON (structure + readability). If validation fails the CLI exits with a clear `CONFIG ERROR`, so dom
+ain teams can fix issues before queries run.
+
 ### Code Constants (Edit in clockify_support_cli.py)
 
 ```python
