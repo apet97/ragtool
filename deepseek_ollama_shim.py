@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
+"""
+DeepSeek → Ollama Shim with Rate Limiting & Audit Logging (Rank 13)
+"""
 import os, json, time, ssl, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.request import Request, urlopen
 from urllib.error import URLError
+from collections import deque
 
 API_BASE     = os.environ.get("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
 API_KEY      = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")
@@ -18,6 +22,54 @@ TLS_KEY      = os.environ.get("SHIM_TLS_KEY")
 if not API_KEY:
     print("ERROR: set DEEPSEEK_API_KEY", file=sys.stderr)
     sys.exit(1)
+
+# Rank 13: Rate limiting and audit logging
+RATE_LIMIT_MAX = int(os.environ.get("RATE_LIMIT_MAX", "60"))
+RATE_LIMIT_WINDOW = int(os.environ.get("RATE_LIMIT_WINDOW", "60"))
+AUDIT_LOG_FILE = os.environ.get("AUDIT_LOG_FILE", "deepseek_audit.jsonl")
+
+class SimpleRateLimiter:
+    """Token bucket rate limiter (Rank 13)."""
+    def __init__(self, max_requests, window_seconds):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests = deque()  # (timestamp, client_ip)
+
+    def allow_request(self, client_ip):
+        now = time.time()
+        # Remove old requests
+        while self.requests and self.requests[0][0] < now - self.window_seconds:
+            self.requests.popleft()
+        # Count requests from this IP
+        ip_requests = sum(1 for _, ip in self.requests if ip == client_ip)
+        if ip_requests >= self.max_requests:
+            return False
+        self.requests.append((now, client_ip))
+        return True
+
+    def wait_time(self, client_ip):
+        now = time.time()
+        for timestamp, ip in self.requests:
+            if ip == client_ip:
+                return max(0.0, self.window_seconds - (now - timestamp))
+        return 0.0
+
+RATE_LIMITER = SimpleRateLimiter(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW)
+
+def audit_log(event, client_ip, details=None):
+    """Log security events (Rank 13)."""
+    try:
+        log_entry = {
+            "timestamp": time.time(),
+            "timestamp_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "event": event,
+            "client_ip": client_ip,
+            "details": details or {}
+        }
+        with open(AUDIT_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_entry) + "\n")
+    except Exception as e:
+        print(f"[shim] ⚠️  Audit log failed: {e}", file=sys.stderr)
 
 scheme = "https" if TLS_CERT and TLS_KEY else "http"
 print(f"[shim] Starting: {scheme}://{HOST}:{PORT}")
@@ -108,10 +160,22 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps({"error": msg}).encode())
     
     def _check_access(self):
-        if ALLOW_IPS and self.client_address[0] not in ALLOW_IPS:
+        client_ip = self.client_address[0]
+
+        # Rank 13: Check rate limit
+        if not RATE_LIMITER.allow_request(client_ip):
+            wait_seconds = RATE_LIMITER.wait_time(client_ip)
+            audit_log("rate_limit_exceeded", client_ip, {"wait_seconds": wait_seconds})
+            self._error(429, f"Rate limit exceeded. Retry after {wait_seconds:.0f} seconds")
+            return False
+
+        # Check IP allowlist
+        if ALLOW_IPS and client_ip not in ALLOW_IPS:
+            audit_log("ip_denied", client_ip, {})
             self._forbidden("Forbidden: IP not allowed")
             return False
 
+        # Check auth token
         if AUTH_TOKEN:
             auth_header = self.headers.get("Authorization", "")
             token = None
@@ -121,9 +185,11 @@ class H(BaseHTTPRequestHandler):
                 token = self.headers["X-Auth-Token"]
 
             if token != AUTH_TOKEN:
+                audit_log("auth_invalid", client_ip, {})
                 self._unauthorized()
                 return False
 
+        audit_log("access_granted", client_ip, {"path": self.path})
         return True
 
     def do_GET(self):

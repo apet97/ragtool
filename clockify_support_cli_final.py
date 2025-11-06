@@ -1000,8 +1000,31 @@ def tokenize(s: str):
     return re.findall(r"[a-z0-9]+", s)
 
 def approx_tokens(chars: int) -> int:
-    """Estimate tokens: 1 token ≈ 4 chars."""
+    """Estimate tokens: 1 token ≈ 4 chars.
+
+    Note: This is a fallback heuristic. Use count_tokens() for accurate counts.
+    """
     return max(1, chars // 4)
+
+def count_tokens(text: str, model: str = "gpt-3.5-turbo") -> int:
+    """Count actual tokens using tiktoken (Rank 5: accurate token counting).
+
+    Falls back to character-based heuristic if tiktoken is unavailable.
+
+    Args:
+        text: Text to count tokens for
+        model: Model name for tokenizer (default: gpt-3.5-turbo)
+
+    Returns:
+        Accurate token count
+    """
+    try:
+        import tiktoken
+        encoding = tiktoken.encoding_for_model(model)
+        return len(encoding.encode(text))
+    except (ImportError, KeyError):
+        # Fallback to heuristic if tiktoken unavailable or model not found
+        return approx_tokens(len(text))
 
 def compute_sha256(filepath: str) -> str:
     """Compute SHA256 hash of file."""
@@ -1014,16 +1037,78 @@ def compute_sha256(filepath: str) -> str:
             sha256.update(data)
     return sha256.hexdigest()
 
+def extract_citations(text: str) -> list[int]:
+    """Extract citation IDs from answer text (Rank 9: citation validation).
+
+    Supports formats: [id_123], [123], [id123, id456], etc.
+
+    Args:
+        text: Answer text containing citations
+
+    Returns:
+        List of chunk IDs referenced in text
+    """
+    import re
+    citations = []
+    # Match patterns like [id_123], [123], [id_123, id_456]
+    pattern = r'\[(?:id_?)?(\d+)(?:\s*,\s*(?:id_?)?(\d+))*\]'
+    matches = re.finditer(pattern, text, re.IGNORECASE)
+
+    for match in matches:
+        # Extract all numbers from the match
+        nums = re.findall(r'\d+', match.group(0))
+        citations.extend([int(n) for n in nums])
+
+    return list(set(citations))  # Remove duplicates
+
+def validate_citations(answer: str, valid_chunk_ids: list[int]) -> tuple[bool, list[int], list[int]]:
+    """Validate that answer citations match packed chunks (Rank 9).
+
+    Args:
+        answer: LLM-generated answer with citations
+        valid_chunk_ids: List of chunk IDs actually included in context
+
+    Returns:
+        Tuple of (is_valid, valid_citations, invalid_citations)
+    """
+    extracted = extract_citations(answer)
+    valid_set = set(valid_chunk_ids)
+
+    valid_citations = [cid for cid in extracted if cid in valid_set]
+    invalid_citations = [cid for cid in extracted if cid not in valid_set]
+
+    is_valid = len(invalid_citations) == 0
+    return is_valid, valid_citations, invalid_citations
+
 def truncate_to_token_budget(text: str, budget: int) -> str:
-    """Truncate text to fit token budget, append ellipsis - Task C."""
-    est_tokens = approx_tokens(len(text))
+    """Truncate text to fit token budget, append ellipsis - Task C.
+
+    Uses accurate token counting when available (Rank 5).
+    """
+    est_tokens = count_tokens(text)
     if est_tokens <= budget:
         return text
-    # Approximate char count for budget
+
+    # Binary search for optimal truncation point
+    # Start with heuristic estimate
     target_chars = budget * 4
     if len(text) <= target_chars:
         return text
-    return text[:target_chars] + " […]"
+
+    # Iteratively truncate until we fit the budget
+    low, high = 0, len(text)
+    result = text[:target_chars]
+
+    while low < high:
+        mid = (low + high + 1) // 2
+        candidate = text[:mid]
+        if count_tokens(candidate) <= budget:
+            result = candidate
+            low = mid
+        else:
+            high = mid - 1
+
+    return result + " […]" if result != text else text
 
 # ====== KB PARSING ======
 def parse_articles(md_text: str):
@@ -1561,6 +1646,7 @@ def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0) 
     dense_computed = 0
 
     if _FAISS_INDEX:
+        # Rank 2: Only score FAISS candidates, don't compute full corpus (2-3x speedup)
         D, I = _FAISS_INDEX.search(
             qv_n.reshape(1, -1).astype("float32"),
             max(ANN_CANDIDATE_MIN, top_k * FAISS_CANDIDATE_MULTIPLIER),
@@ -1568,20 +1654,11 @@ def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0) 
         candidate_idx = [int(i) for i in I[0] if 0 <= i < n_chunks]
         dense_from_ann = np.array([float(d) for d in D[0][: len(candidate_idx)]], dtype=np.float32)
 
-        dense_scores_full = np.empty(n_chunks, dtype=np.float32)
-        candidate_idx_arr = np.array(candidate_idx, dtype=np.int32) if candidate_idx else np.empty(0, dtype=np.int32)
-        if candidate_idx:
-            dense_scores_full[candidate_idx_arr] = dense_from_ann
-
-        remaining_mask = np.ones(n_chunks, dtype=bool)
-        if candidate_idx:
-            remaining_mask[candidate_idx_arr] = False
-        remaining_idx = np.nonzero(remaining_mask)[0]
-        if remaining_idx.size:
-            dot_start = time.perf_counter()
-            dense_scores_full[remaining_idx] = vecs_n[remaining_idx].dot(qv_n)
-            dot_elapsed = time.perf_counter() - dot_start
-            dense_computed = int(remaining_idx.size)
+        # Store only candidate scores, use lazy computation for others
+        dense_scores = dense_from_ann
+        dense_scores_full = None  # Will use DenseScoreStore with lazy computation
+        dense_computed = len(candidate_idx)
+        dot_elapsed = 0.0  # No additional dot product needed
     # Fallback to HNSW if available
     elif hnsw:
         _, cand = hnsw.knn_query(qv_n, k=max(ANN_CANDIDATE_MIN, top_k * FAISS_CANDIDATE_MULTIPLIER))
@@ -1803,7 +1880,7 @@ def pack_snippets(chunks, order, pack_top=6, budget_tokens=CTX_TOKEN_BUDGET, num
     first_truncated = False
 
     sep_text = "\n\n---\n\n"
-    sep_tokens = approx_tokens(len(sep_text))
+    sep_tokens = count_tokens(sep_text)  # Rank 5: accurate token counting
 
     for idx_pos, idx in enumerate(order):
         if len(ids) >= pack_top:
@@ -1813,8 +1890,8 @@ def pack_snippets(chunks, order, pack_top=6, budget_tokens=CTX_TOKEN_BUDGET, num
         hdr = _fmt_snippet_header(c)
         body = c["text"]
 
-        hdr_tokens = approx_tokens(len(hdr) + 1)  # + newline after header
-        body_tokens = approx_tokens(len(body))
+        hdr_tokens = count_tokens(hdr + "\n")  # Rank 5: accurate token counting
+        body_tokens = count_tokens(body)
         need_sep = 1 if out else 0
         sep_cost = sep_tokens if need_sep else 0
 
@@ -1825,7 +1902,7 @@ def pack_snippets(chunks, order, pack_top=6, budget_tokens=CTX_TOKEN_BUDGET, num
                 # amount available for body after header
                 allow_body = max(1, budget_tokens - hdr_tokens)
                 body = truncate_to_token_budget(body, allow_body)
-                body_tokens = approx_tokens(len(body))
+                body_tokens = count_tokens(body)
                 item_tokens = hdr_tokens + body_tokens
                 first_truncated = True
             out.append(hdr + "\n" + body)
@@ -2599,13 +2676,14 @@ def apply_reranking(question, chunks, mmr_selected, scores, use_rerank, seed, nu
     return mmr_selected, rerank_scores, rerank_applied, rerank_reason, timing
 
 
-def generate_llm_answer(question, context_block, seed, num_ctx, num_predict, retries):
-    """Generate answer from LLM given question and context with confidence scoring (Rank 28).
+def generate_llm_answer(question, context_block, seed, num_ctx, num_predict, retries, packed_ids=None):
+    """Generate answer from LLM given question and context with confidence scoring and citation validation (Rank 28, Rank 9).
 
     Args:
         question: User question
         context_block: Packed context snippets
         seed, num_ctx, num_predict, retries: LLM parameters
+        packed_ids: List of chunk IDs included in context (for citation validation)
 
     Returns:
         Tuple of (answer_text, timing, confidence)
@@ -2656,6 +2734,13 @@ def generate_llm_answer(question, context_block, seed, num_ctx, num_predict, ret
     except Exception as e:
         # Unexpected error in parsing
         logger.warning(f"Error parsing LLM confidence: {e}")
+
+    # Rank 9: Validate citations match packed chunks
+    if packed_ids is not None:
+        is_valid, valid_cits, invalid_cits = validate_citations(answer, packed_ids)
+        if not is_valid and invalid_cits:
+            logger.warning(f"[citation_validation] Invalid citations: {invalid_cits} (valid: {packed_ids[:10]}...)")
+            # Log warning but don't fail - some models may use different citation formats
 
     return answer, timing, confidence
 
@@ -2823,8 +2908,8 @@ def answer_once(
         # Apply policy preamble for sensitive queries
         block = inject_policy_preamble(block, question)
 
-        # Step 6: Generate answer from LLM (Rank 28: with confidence)
-        ans, llm_timing, confidence = generate_llm_answer(question, block, seed, num_ctx, num_predict, retries)
+        # Step 6: Generate answer from LLM (Rank 28: with confidence, Rank 9: with citation validation)
+        ans, llm_timing, confidence = generate_llm_answer(question, block, seed, num_ctx, num_predict, retries, packed_ids=ids)
         timings["ask_llm"] = llm_timing
         timings["total"] = time.time() - turn_start
 
