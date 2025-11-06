@@ -94,3 +94,15 @@ FILES = {
 # ====== BUILD LOCK CONFIG ======
 BUILD_LOCK = ".build.lock"
 BUILD_LOCK_TTL_SEC = int(os.environ.get("BUILD_LOCK_TTL_SEC", "900"))  # Task D: 15 minutes default
+
+# ====== RETRIEVAL CONFIG (CONTINUED) ======
+# FAISS/HNSW candidate generation (Quick Win #6)
+FAISS_CANDIDATE_MULTIPLIER = 3  # Retrieve top_k * 3 candidates for reranking
+ANN_CANDIDATE_MIN = 200  # Minimum candidates even if top_k is small
+
+# Reranking (Quick Win #6)
+RERANK_SNIPPET_MAX_CHARS = 500  # Truncate chunk text for reranking prompt
+RERANK_MAX_CHUNKS = 12  # Maximum chunks to send to reranking
+
+# Retrieval thresholds (Quick Win #6)
+COVERAGE_MIN_CHUNKS = 2  # Minimum chunks above threshold to proceed

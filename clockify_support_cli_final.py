@@ -106,6 +106,13 @@ DEFAULT_RETRIES = 0
 MMR_LAMBDA = 0.7
 CTX_TOKEN_BUDGET = int(os.environ.get("CTX_BUDGET", "2800"))  # ~11,200 chars, overridable
 
+# Quick Win #6: Extracted magic numbers to config
+FAISS_CANDIDATE_MULTIPLIER = 3  # Retrieve top_k * 3 candidates for reranking
+ANN_CANDIDATE_MIN = 200  # Minimum candidates even if top_k is small
+RERANK_SNIPPET_MAX_CHARS = 500  # Truncate chunk text for reranking prompt
+RERANK_MAX_CHUNKS = 12  # Maximum chunks to send to reranking
+COVERAGE_MIN_CHUNKS = 2  # Minimum chunks above threshold to proceed
+
 # ====== EMBEDDINGS BACKEND (v4.1) ======
 EMB_BACKEND = os.environ.get("EMB_BACKEND", "local")  # "local" or "ollama"
 
@@ -1404,13 +1411,17 @@ def embed_query(question: str, retries=0) -> np.ndarray:
     except Exception as e:
         raise EmbeddingError(f"Query embedding failed: {e}") from e
 
-def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0):
+def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0) -> tuple[list[int], dict[str, np.ndarray]]:
     """Hybrid retrieval: dense + BM25 + dedup. Optionally uses FAISS/HNSW for fast K-NN.
 
     Scoring: hybrid = ALPHA_HYBRID * normalize(BM25) + (1 - ALPHA_HYBRID) * normalize(dense)
 
     Query expansion: Applies domain-specific synonym expansion for BM25 (keyword-based),
     uses original query for dense retrieval (embeddings already capture semantics).
+
+    Returns:
+        Tuple of (filtered_indices, scores_dict) where filtered_indices is list of int
+        and scores_dict contains 'dense', 'bm25', and 'hybrid' numpy arrays.
     """
     global _FAISS_INDEX
 
@@ -1431,12 +1442,12 @@ def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0):
 
     # Use FAISS if available for fast candidate generation
     if _FAISS_INDEX:
-        D, I = _FAISS_INDEX.search(qv_n.reshape(1, -1).astype("float32"), max(200, top_k * 3))
+        D, I = _FAISS_INDEX.search(qv_n.reshape(1, -1).astype("float32"), max(ANN_CANDIDATE_MIN, top_k * FAISS_CANDIDATE_MULTIPLIER))
         candidate_idx = [int(i) for i in I[0] if i >= 0]
         dense_scores = np.array([float(d) for d in D[0][:len(candidate_idx)]])
     # Fallback to HNSW if available
     elif hnsw:
-        _, cand = hnsw.knn_query(qv_n, k=max(200, top_k * 3))
+        _, cand = hnsw.knn_query(qv_n, k=max(ANN_CANDIDATE_MIN, top_k * FAISS_CANDIDATE_MULTIPLIER))
         candidate_idx = cand[0].tolist()
         dense_scores_full = vecs_n.dot(qv_n)
         dense_scores = dense_scores_full[candidate_idx]
@@ -1492,7 +1503,7 @@ def rerank_with_llm(question: str, chunks, selected, scores, seed=DEFAULT_SEED, 
 
     # Build passage list
     passages_text = "\n\n".join([
-        f"[id={chunks[i]['id']}]\n{chunks[i]['text'][:500]}"
+        f"[id={chunks[i]['id']}]\n{chunks[i]['text'][:RERANK_SNIPPET_MAX_CHARS]}"
         for i in selected
     ])
     payload = {
@@ -1650,7 +1661,7 @@ def pack_snippets(chunks, order, pack_top=6, budget_tokens=CTX_TOKEN_BUDGET, num
 # ====== COVERAGE CHECK ======
 def coverage_ok(selected, dense_scores, threshold):
     """Check coverage."""
-    if len(selected) < 2:
+    if len(selected) < COVERAGE_MIN_CHUNKS:
         return False
     highs = sum(1 for i in selected if dense_scores[i] >= threshold)
     return highs >= 2
@@ -1706,7 +1717,11 @@ def build(md_path: str, retries=0):
         logger.info("BUILDING KNOWLEDGE BASE")
         logger.info("=" * 70)
         if not os.path.exists(md_path):
-            raise BuildError(f"{md_path} not found")
+            raise BuildError(
+                f"{md_path} not found.\n"
+                f"Expected knowledge base file at this location.\n"
+                f"Hint: Ensure knowledge_full.md exists in current directory."
+            )
 
         logger.info("\n[1/4] Parsing and chunking...")
         chunks = build_chunks(md_path)
@@ -1860,8 +1875,12 @@ def build(md_path: str, retries=0):
         logger.info("=" * 70)
 
 # ====== LOAD INDEX ======
-def load_index():
-    """Load artifacts with full integrity validation - Task H."""
+def load_index() -> tuple[list[dict], np.ndarray, dict, object] | None:
+    """Load artifacts with full integrity validation - Task H.
+
+    Returns:
+        Tuple of (chunks, vecs_n, bm, hnsw) or None if load fails.
+    """
     # Check for metadata file
     if not os.path.exists(FILES["index_meta"]):
         logger.warning("[rebuild] index.meta.json missing: run 'python3 clockify_support_cli.py build knowledge_full.md'")
@@ -2006,16 +2025,19 @@ def sanitize_question(q: str, max_length: int = 2000) -> str:
     """
     # Type check
     if not isinstance(q, str):
-        raise ValueError("Question must be a string")
+        raise ValueError(f"Question must be a string, got {type(q).__name__}")
 
     # Strip whitespace
     q = q.strip()
 
     # Check length
     if len(q) == 0:
-        raise ValueError("Question cannot be empty")
+        raise ValueError("Question cannot be empty. Hint: Provide a meaningful question about Clockify.")
     if len(q) > max_length:
-        raise ValueError(f"Question too long (max {max_length} characters, got {len(q)})")
+        raise ValueError(
+            f"Question too long (max {max_length} characters, got {len(q)}).\n"
+            f"Hint: Break your question into smaller, focused queries."
+        )
 
     # Check for null bytes first (specific check)
     if '\x00' in q:
@@ -2415,8 +2437,13 @@ def answer_once(
     num_ctx=DEFAULT_NUM_CTX,
     num_predict=DEFAULT_NUM_PREDICT,
     retries=0
-):
-    """Answer a single question. Stateless. Returns (answer_text, metadata) - Task B, C, F."""
+) -> tuple[str, dict]:
+    """Answer a single question. Stateless. Returns (answer_text, metadata) - Task B, C, F.
+
+    Returns:
+        Tuple of (answer_text, metadata) where answer_text is the generated answer string
+        and metadata is a dict containing selected chunks, scores, timings, etc.
+    """
     # Sanitize question input
     try:
         question = sanitize_question(question)
