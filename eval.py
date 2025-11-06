@@ -13,6 +13,10 @@ import sys
 import os
 import numpy as np
 
+MRR_THRESHOLD = 0.70
+PRECISION_THRESHOLD = 0.60
+NDCG_THRESHOLD = 0.65
+
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -98,7 +102,7 @@ def evaluate(dataset_path="eval_dataset.jsonl", verbose=False):
 
     # Import after path setup
     try:
-        from clockify_support_cli_final import load_index, embed_local, retrieve
+        from clockify_support_cli_final import load_index, retrieve
     except ImportError as e:
         print(f"Error importing RAG functions: {e}")
         sys.exit(1)
@@ -110,17 +114,10 @@ def evaluate(dataset_path="eval_dataset.jsonl", verbose=False):
         if result is None:
             print("Error: Failed to load index")
             sys.exit(1)
-        vecs, meta, bm, index_meta = result
+        chunks, vecs_n, bm, hnsw = result
     except Exception as e:
         print(f"Error loading index: {e}")
         sys.exit(1)
-
-    # Load chunks
-    chunks = []
-    with open("chunks.jsonl", "r", encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                chunks.append(json.loads(line))
 
     # Load evaluation dataset
     dataset = []
@@ -142,7 +139,7 @@ def evaluate(dataset_path="eval_dataset.jsonl", verbose=False):
 
         try:
             # Retrieve chunks using RAG system
-            selected, scores = retrieve(query, chunks, vecs, bm, top_k=12)
+            selected, _ = retrieve(query, chunks, vecs_n, bm, top_k=12, hnsw=hnsw)
             retrieved_ids = list(selected)
 
             # Compute metrics
@@ -189,22 +186,22 @@ def evaluate(dataset_path="eval_dataset.jsonl", verbose=False):
 
     # Interpretation
     print("\nINTERPRETATION:")
-    if results['mrr_at_10'] >= 0.70:
-        print("✅ MRR@10 ≥ 0.70: Excellent - first relevant result typically in top 2")
+    if results['mrr_at_10'] >= MRR_THRESHOLD:
+        print(f"✅ MRR@10 ≥ {MRR_THRESHOLD:.2f}: Excellent - first relevant result typically in top 2")
     elif results['mrr_at_10'] >= 0.50:
         print("⚠️  MRR@10 ≥ 0.50: Good - first relevant result typically in top 3-4")
     else:
         print("❌ MRR@10 < 0.50: Needs improvement - relevant results ranked too low")
 
-    if results['precision_at_5'] >= 0.60:
-        print("✅ Precision@5 ≥ 0.60: Excellent - majority of top 5 are relevant")
+    if results['precision_at_5'] >= PRECISION_THRESHOLD:
+        print(f"✅ Precision@5 ≥ {PRECISION_THRESHOLD:.2f}: Excellent - majority of top 5 are relevant")
     elif results['precision_at_5'] >= 0.40:
         print("⚠️  Precision@5 ≥ 0.40: Good - decent relevance in top results")
     else:
         print("❌ Precision@5 < 0.40: Needs improvement - too many irrelevant results")
 
-    if results['ndcg_at_10'] >= 0.65:
-        print("✅ NDCG@10 ≥ 0.65: Excellent - relevant results well-ranked")
+    if results['ndcg_at_10'] >= NDCG_THRESHOLD:
+        print(f"✅ NDCG@10 ≥ {NDCG_THRESHOLD:.2f}: Excellent - relevant results well-ranked")
     elif results['ndcg_at_10'] >= 0.50:
         print("⚠️  NDCG@10 ≥ 0.50: Good - reasonable ranking quality")
     else:
@@ -224,7 +221,11 @@ if __name__ == "__main__":
     results = evaluate(dataset_path=args.dataset, verbose=args.verbose)
 
     # Exit with appropriate code based on results
-    if results['mrr_at_10'] >= 0.70 and results['precision_at_5'] >= 0.60:
+    if (
+        results['mrr_at_10'] >= MRR_THRESHOLD
+        and results['precision_at_5'] >= PRECISION_THRESHOLD
+        and results['ndcg_at_10'] >= NDCG_THRESHOLD
+    ):
         sys.exit(0)  # Success
     else:
         sys.exit(1)  # Metrics below target
