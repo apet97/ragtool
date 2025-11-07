@@ -1,115 +1,195 @@
 # Comprehensive RAG Tool Analysis
 
 ## Executive Summary
-- Overall assessment: ⭐️⭐️☆☆☆ (2.5/5)
-- Top 3 strengths
-  1. Mature hybrid retrieval stack (BM25 + dense + MMR) with optional reranking and detailed logging hooks.
-  2. Robust operational hardening: atomic artifact writes, build locking, configurable timeouts, and guardrails for refusals.
-  3. Extensive regression suite and utilities (evaluation harness, benchmarking, dummy index scripts) that cover end-to-end flows.
-- Top 5 critical improvements needed
-  1. Fix evaluation pipeline syntax/logic regression preventing `eval.py` from running.
-  2. Rework ANN path in `retrieve` to avoid recomputing dense scores for the full corpus, which erases FAISS speed benefits.
-  3. Include retrieval parameters in cache keys to prevent stale answers when users change `top_k`, `pack_top`, or reranking options.
-  4. Stabilize query expansion output order (remove set-based randomness) to keep caching and logging deterministic.
-  5. Replace character-based token heuristics in snippet packing with an LLM tokenizer to avoid silent context budget overruns, especially for non-English content.
-- Production readiness: **NO** – correctness regressions (evaluation script), cache invalidation risks, and unresolved performance bottlenecks must be addressed before shipping.
+- **Overall assessment:** ★★★☆☆ (3/5)
+- **Top strengths:**
+  1. Feature-rich hybrid retrieval pipeline with BM25, dense vectors, MMR, optional reranking, and detailed telemetry. 【F:clockify_support_cli_final.py†L1400-L1788】【F:clockify_support_cli_final.py†L2773-L3042】
+  2. Deep supporting tooling (benchmarks, evaluation harness, dummy index generator) that enables local validation without heavy dependencies. 【F:benchmark.py†L1-L176】【F:scripts/create_dummy_index.py†L1-L97】【F:eval.py†L1-L160】
+  3. Comprehensive automated tests that exercise retrieval quality, caching, rate limiting, sanitization, and CLI behaviour. 【F:tests/test_retrieval.py†L1-L160】【F:tests/test_query_cache.py†L1-L120】【F:tests/test_sanitization.py†L1-L118】
+- **Top urgent improvements:**
+  1. Fix the CLI `QueryCache` API mismatch—`answer_once` passes retrieval parameters but the in-file cache implementation ignores them, causing runtime errors and stale cache entries. 【F:clockify_support_cli_final.py†L2417-L2445】【F:clockify_support_cli_final.py†L2812-L3040】
+  2. Stop re-defining `QueryCache`/`RateLimiter`/retrieval helpers in `clockify_support_cli_final.py`; import the maintained versions from `clockify_rag` to prevent drift. 【F:clockify_support_cli_final.py†L2280-L2526】【F:clockify_rag/caching.py†L70-L170】
+  3. Make the threaded embedding builder safe—`clockify_rag.embedding.embed_texts` shares a single `requests.Session` across threads, which is not thread-safe and can corrupt responses under load. 【F:clockify_rag/embedding.py†L113-L192】
+  4. Seed FAISS training on macOS/arm64 so builds are deterministic, matching the behaviour already implemented for other platforms. 【F:clockify_support_cli_final.py†L394-L454】
+  5. Remove dead/duplicate definitions (e.g., double `ensure_index_ready`) and collapse legacy docs to cut maintenance overhead. 【F:clockify_support_cli_final.py†L3324-L3361】【F:ANALYSIS_REPORT1.md†L1-L120】
+- **Production readiness:** **NO** – the cache API defect breaks repeated queries, the threaded embedding path is unsafe, and configuration drift between the monolithic CLI and the modular package makes maintenance risky.
 
 ## File-by-File Analysis
-| File | Purpose | LOC | Key Findings | Quality (1-5) |
-|------|---------|-----|--------------|---------------|
-| `clockify_support_cli_final.py` | Main CLI implementing build/retrieve/chat pipeline | 3,684 | Feature-rich but monolithic; ANN path recomputes full dense scores, cache ignores parameters, query expansion nondeterministic, duplicated coverage checks, logging overhead even when disabled. | 2.5 |
-| `clockify_support_cli.py` | Backward-compatible entry point | 17 | Simple wrapper; OK. | 4 |
-| `clockify_rag/__init__.py` | Package facade | 89 | Clean exports; consistent docstring. | 4 |
-| `clockify_rag/caching.py` | Rate limiter & query cache | 268 | Well-structured; consider hashing parameters; thread-safe. | 4 |
-| `clockify_rag/chunking.py` | Markdown parsing & chunking | 177 | Sentence-aware chunking; no major issues, but overlap heuristics could be tuned per language. | 4 |
-| `clockify_rag/config.py` | Constants/config | 119 | Clear but lacks structured config loading/validation beyond env parsing. | 3.5 |
-| `clockify_rag/embedding.py` | Embedding backends & cache | 174 | Handles validation and cache persistence; sequential Ollama calls limit throughput. | 3.5 |
-| `clockify_rag/exceptions.py` | Custom exceptions | 21 | OK. | 5 |
-| `clockify_rag/http_utils.py` | HTTP session + retries | 100 | Solid retry adapter; could expose pool size/env knobs. | 4 |
-| `clockify_rag/indexing.py` | Build/load BM25/FAISS | 392 | Good atomic writes and caching; ANN training lacks deterministic seeding; reuse with CLI duplicates logic. | 3.5 |
-| `clockify_rag/utils.py` | File, validation, logging helpers | 454 | Comprehensive; some duplication with CLI utilities; consider sharing. | 3.5 |
-| `benchmark.py` | Latency/memory benchmarks | 444 | Useful harness; retrieval benchmark mislabeled (`bm25` still hybrid), lacks guard when index dict form changes. | 3 |
-| `deepseek_ollama_shim.py` | Local shim to DeepSeek API | 231 | Provides auth/IP allowlist/TLS options but no rate limiting or logging; expose high-risk defaults. | 2.5 |
-| `eval.py` | Retrieval quality evaluation | 476 | Broken indentation/exception block prevents execution; duplicated logic; needs cleanup before use. | 1.5 |
-| `scripts/create_dummy_index.py` | Generate toy artifacts | 97 | Works; embeddings use identity rows (dimension guard). | 4 |
-| `scripts/generate_chunk_title_map.py` | Map titles to chunk IDs | 65 | Straightforward; OK. | 4 |
-| `scripts/populate_eval.py` | Assist manual labeling | 529 | Powerful interactive tool; heuristics heavy but maintainable; ensure STOPWORDS dedupe. | 3.5 |
-| `tests/*` (12 modules) | Regression coverage | 1,426 total | Broad coverage of caching, retrieval, CLI; fixtures rely on CLI import—slow. Some tests duplicate logic (coverage, rerank). | 3.5 |
-| Documentation set (`README.md`, `SUPPORT_CLI_QUICKSTART.md`, numerous historical reports) | User onboarding & audit trail | >5,000 | Rich but inconsistent: many “production ready” claims conflict with current defects, duplicated/outdated status files. Needs consolidation. | 2.5 |
-| Config (`pyproject.toml`, `requirements*.txt`, `Makefile`, `setup.sh`) | Tooling & deps | N/A | Reasonable defaults; ensure dependency pins align with CPU/GPU targets; `setup.sh` absent from review. | 3.5 |
+- **clockify_support_cli_final.py** (3,791 LOC)
+  - _Purpose_: Monolithic CLI implementing build, retrieval, reranking, caching, REPL, tests.
+  - _Key findings_: Critical cache API bug, duplicated infrastructure already available in `clockify_rag`, duplicate `ensure_index_ready`, non-deterministic FAISS training on arm64, significant complexity without modular reuse.
+  - _Quality_: ★★☆☆☆
+- **clockify_support_cli.py** (17 LOC)
+  - _Purpose_: Thin wrapper to keep legacy entrypoint.
+  - _Key findings_: Works but still imports the bloated monolith instead of package APIs.
+  - _Quality_: ★★★★☆
+- **clockify_rag/__init__.py** (89 LOC)
+  - _Purpose_: Package facade exposing config/utilities.
+  - _Key findings_: Healthy surface, but CLI does not leverage it fully.
+  - _Quality_: ★★★★☆
+- **clockify_rag/config.py** (124 LOC)
+  - _Purpose_: Central configuration constants/environment overrides.
+  - _Key findings_: Sensible defaults; consider documenting ANN knobs and logging booleans.
+  - _Quality_: ★★★★☆
+- **clockify_rag/utils.py** (454 LOC)
+  - _Purpose_: Locking, atomic I/O, logging, chunk utilities.
+  - _Key findings_: Solid implementation; duplication with CLI copy should be removed.
+  - _Quality_: ★★★★☆
+- **clockify_rag/chunking.py** (177 LOC)
+  - _Purpose_: Markdown parsing and sentence-aware chunking.
+  - _Key findings_: Uses NLTK when available; error logging adequate.
+  - _Quality_: ★★★★☆
+- **clockify_rag/embedding.py** (259 LOC)
+  - _Purpose_: Embedding generation with optional parallel batching and cache persistence.
+  - _Key findings_: Thread pool shares one `requests.Session`; risk of race conditions. Submits one future per chunk, which can overwhelm executor on large corpora.
+  - _Quality_: ★★☆☆☆
+- **clockify_rag/indexing.py** (396 LOC)
+  - _Purpose_: Build/load pipeline, BM25 construction, FAISS management.
+  - _Key findings_: Deterministic seeding only for non-arm64; CLI duplicates logic. Consider reusing this module in CLI.
+  - _Quality_: ★★★☆☆
+- **clockify_rag/caching.py** (284 LOC)
+  - _Purpose_: Rate limiter and parameter-aware query cache.
+  - _Key findings_: Correct API; should replace CLI redefinitions.
+  - _Quality_: ★★★★☆
+- **clockify_rag/http_utils.py** (100 LOC)
+  - _Purpose_: Shared HTTP session with retry/backoff.
+  - _Key findings_: Pool sizing improvements noted; consider adding thread-local sessions.
+  - _Quality_: ★★★☆☆
+- **clockify_rag/exceptions.py** (21 LOC)
+  - _Purpose_: Domain-specific error types.
+  - _Key findings_: Simple and clear.
+  - _Quality_: ★★★★★
+- **clockify_rag/plugins/**
+  - `__init__.py` (41 LOC): Aggregates plugin registry—good separation. ★★★★☆
+  - `interfaces.py` (153 LOC): ABC definitions; well documented. ★★★★☆
+  - `registry.py` (175 LOC): Central registry with validation. ★★★☆☆ (consider thread safety)
+  - `examples.py` (225 LOC): Reference plugins; educational but should be marked experimental. ★★★☆☆
+- **benchmark.py** (444 LOC)
+  - _Purpose_: Latency/memory benchmarks with fake remote stubs.
+  - _Key findings_: Comprehensive; ensure README links to it.
+  - _Quality_: ★★★★☆
+- **deepseek_ollama_shim.py** (297 LOC)
+  - _Purpose_: HTTP shim to DeepSeek API with rate limiting/audit logging.
+  - _Key findings_: Good security controls; consider configurable TLS defaults and better error propagation.
+  - _Quality_: ★★★☆☆
+- **eval.py** (471 LOC)
+  - _Purpose_: Offline evaluation script with lexical fallback and metrics.
+  - _Key findings_: Solid metrics; ensure hybrid path actually used in CI once caches fixed.
+  - _Quality_: ★★★★☆
+- **scripts/populate_eval.py** (529 LOC)
+  - _Purpose_: Assist with annotating evaluation datasets.
+  - _Key findings_: Heuristic heavy; interactive bits well documented.
+  - _Quality_: ★★★☆☆
+- **scripts/create_dummy_index.py** (97 LOC)
+  - _Purpose_: Produce synthetic artifacts for CI/benchmarks.
+  - _Key findings_: Straightforward.
+  - _Quality_: ★★★★☆
+- **scripts/generate_chunk_title_map.py** (65 LOC)
+  - _Purpose_: Map chunk IDs to titles for debugging.
+  - _Key findings_: Works; consider integrating into build pipeline.
+  - _Quality_: ★★★☆☆
+- **tests/**
+  - `conftest.py` (157 LOC): Fixtures for sample corpus. ★★★★☆
+  - Retrieval-centric tests (multiple files) provide good coverage; would catch cache regression if CLI reused package cache. ★★★★☆ overall.
+  - Thread-safety and CLI tests ensure concurrency guards. ★★★☆☆ (lack of integration with actual session concurrency).
+- **Makefile** (120 LOC)
+  - _Purpose_: Developer commands.
+  - _Key findings_: Helpful; ensure `make clean` removes new artifacts.
+  - _Quality_: ★★★★☆
+- **requirements.txt / requirements-m1.txt** (N/A)
+  - _Key findings_: Heavy dependencies pinned; consider extras for optional components.
+  - _Quality_: ★★★☆☆
+- **pyproject.toml** (120 LOC)
+  - _Purpose_: Tooling config.
+  - _Key findings_: Thoughtful; expand mypy coverage once duplication resolved.
+  - _Quality_: ★★★★☆
+- **.github/workflows/** (3 files)
+  - _Purpose_: CI for tests, lint, eval.
+  - _Key findings_: Lightweight installs skip heavy deps; add matrix for macOS once deterministic builds fixed.
+  - _Quality_: ★★★☆☆
+- **config/query_expansions.json** (30 LOC)
+  - _Purpose_: Domain-specific synonyms.
+  - _Key findings_: Works; consider versioning.
+  - _Quality_: ★★★★☆
+- **Documentation set**
+  - Core guides (`README.md`, `README_RAG.md`, `START_HERE.md`, `SUPPORT_CLI_QUICKSTART.md`, `CLOCKIFY_SUPPORT_CLI_README.md`, `README_HARDENED.md`, etc.) are thorough but highly redundant; consolidate to avoid conflicting instructions. ★★☆☆☆
+  - Legacy audit artifacts (`ANALYSIS_REPORT*.md`, `IMPROVEMENTS*.jsonl`, `QUICK_WINS*.md`, `ARCHITECTURE_VISION*.md`, `FINAL_*`, `HARDENED_*`, `MERGE_COMPLETE_v5.1.md`, etc.) clutter the repo and confuse the current state. Recommend archiving or deleting. ★☆☆☆☆
+  - Misc indices/checklists (`TESTPLAN.md`, `TEST_GUIDE.md`, `RELEASE_*`, `PRODUCTION_*`) helpful historically but unmaintained; mark as archived or refresh. ★★☆☆☆
 
 ## Findings by Category
 1. **RAG Quality (score: 6/10)**
-   - Retrieval effectiveness: Hybrid stack solid but ANN optimization undone by dense recomputation; query expansion randomness hurts reproducibility.
-   - Answer quality: JSON enforcement + refusal guard strong, yet citation validation is trust-based and packer token heuristic risks truncation errors.
-   - Prompt engineering: System prompt well-structured with few-shot examples; confidence calibration relies entirely on LLM compliance.
+   - Retrieval effectiveness: Strong hybrid design, but cache bug undermines repeatability and FAISS seeding inconsistency harms reproducibility. 【F:clockify_support_cli_final.py†L394-L454】【F:clockify_support_cli_final.py†L2812-L3040】
+   - Answer quality: Prompting includes policy guards and citation checks, yet citation validation only warns on mismatch. 【F:clockify_support_cli_final.py†L2688-L2764】
+   - Prompt engineering: System/user prompts well structured; reranker prompt is brittle JSON parsing—consider schema enforcement. 【F:clockify_support_cli_final.py†L1771-L1840】
 
 2. **Performance (score: 5/10)**
-   - Indexing speed: Embedding cache helps but rebuild still single-threaded; FAISS training lacks sampling seed.
-   - Query latency: ANN path degenerates to full linear scan; rerank always formats large prompt even when disabled.
-   - Memory efficiency: Dense score arrays always materialized; query logging copies full chunk bodies even when disabled.
+   - Indexing speed: Embedding cache + ANN reduce build time, but threaded embedding is unsafe and may fail under load. 【F:clockify_rag/embedding.py†L113-L192】
+   - Query latency: FAISS candidate pruning and MMR caching help; duplicate ensure_index_ready may trigger redundant rebuilds. 【F:clockify_support_cli_final.py†L3324-L3361】
+   - Memory efficiency: Dense score store lazily computes values; logging includes entire chunks in cache leading to heavier logs.
 
 3. **Correctness (score: 5/10)**
-   - Bug count & severity: `eval.py` regression, cache invalidation gap, duplicated coverage gating logic.
-   - Edge case handling: Good sanitation and refusal behavior; logging still tries to open file even when disabled (after work).
-   - Data validation: Build checks artifacts thoroughly; query expansion file validation robust.
+   - Bug count & severity: High-severity cache API defect, duplicate functions, RNG inconsistency. 【F:clockify_support_cli_final.py†L394-L454】【F:clockify_support_cli_final.py†L2417-L3040】
+   - Edge case handling: Sanitization robust, but QueryCache ignores retrieval params, causing wrong answers when knobs change. 【F:clockify_support_cli_final.py†L2812-L3040】
+   - Data validation: Embedding responses validated for empties; rerank JSON parsing has fallbacks but silent.
 
-4. **Code Quality (score: 6/10)**
-   - Architecture: Package split exists but CLI duplicates much of package logic; functions still large (monolithic `answer_once`).
-   - Maintainability: Docstrings thorough; lacking modularization (no dedicated retriever module).
-   - Documentation: Abundant but inconsistent; multiple overlapping reports.
+4. **Code Quality (score: 4/10)**
+   - Architecture: Parallel package vs monolith leads to drift; need convergence.
+   - Maintainability: 3.7k-line script hard to reason about; duplication of utilities.
+   - Documentation: Too much legacy content without curation.
 
-5. **Security (score: 5/10)**
-   - Vulnerabilities: Shim lacks rate limiting/auditing; query log stores full snippets (potential PII) without opt-in.
-   - Best practices: HTTP requests hardened with retries/timeouts; refusal prompt robust.
+5. **Security (score: 6/10)**
+   - Vulnerabilities: Input sanitization, rate limiting, logging hygiene are good. 【F:clockify_support_cli_final.py†L2264-L2405】
+   - Best practices: Warm-up and logging respect privacy toggles; ensure audit logs in shim rotate.
 
-6. **Developer Experience (score: 6/10)**
-   - Setup ease: README comprehensive but outdated claims; requirements pinned.
-   - CLI usability: Rich flags; query logging toggle available but still performs work when disabled.
-   - Debug capabilities: KPI logging, profiling, self-tests good; evaluation script currently unusable.
+6. **Developer Experience (score: 5/10)**
+   - Setup ease: Makefile and docs help, but redundant guides hamper clarity. 【F:Makefile†L1-L78】
+   - CLI usability: Flags well documented; caching bug causes confusing errors.
+   - Debugging: Debug output rich; consider enabling structured logs by default.
 
 ## Priority Improvements (Top 20)
 | Rank | Category | Issue | Impact | Effort | ROI |
 |------|----------|-------|--------|--------|-----|
-| 1 | Correctness | Fix `eval.py` indentation/exception block so evaluation runs | HIGH | LOW | 10/10 |
-| 2 | Performance | Stop recomputing dense scores for all chunks when FAISS candidates exist | HIGH | MEDIUM | 9/10 |
-| 3 | Correctness | Include retrieval parameters in cache key to avoid stale answers | HIGH | LOW | 9/10 |
-| 4 | RAG | Make query expansion deterministic (ordered synonyms) | MED | LOW | 8/10 |
-| 5 | RAG | Replace char-based token estimate with tokenizer-backed packing | HIGH | MEDIUM | 8/10 |
-| 6 | RAG | Validate LLM-produced citations against selected chunk IDs | HIGH | MEDIUM | 8/10 |
-| 7 | Performance | Skip expensive logging normalization when logging disabled | MED | LOW | 7/10 |
-| 8 | Performance | Batch Ollama embedding calls where API supports it | HIGH | HIGH | 7/10 |
-| 9 | Architecture | Deduplicate build/retrieve logic between CLI and `clockify_rag` package | MED | HIGH | 6/10 |
-|10 | DX | Consolidate documentation (single source of truth) | MED | MEDIUM | 6/10 |
-|11 | Security | Add rate limiting/audit logging to DeepSeek shim | MED | MEDIUM | 6/10 |
-|12 | Performance | Lazily compute dense score arrays when rerank disabled | MED | MEDIUM | 6/10 |
-|13 | RAG | Parameterize coverage threshold per model/backend | MED | LOW | 5/10 |
-|14 | Architecture | Break `answer_once` into testable submodules (retriever, packer, responder) | MED | HIGH | 5/10 |
-|15 | Correctness | Ensure query cache TTL respects metadata timestamp (immutable copy) | MED | LOW | 5/10 |
-|16 | Performance | Precompute/ cache query expansion dictionary once per process (already caching but ensure thread safety) | LOW | LOW | 4/10 |
-|17 | RAG | Add rerank score calibration metrics & evaluation harness | MED | MEDIUM | 4/10 |
-|18 | Security | Allow hashing/redacting answers in query log by default | LOW | LOW | 4/10 |
-|19 | Performance | Seed FAISS training for reproducible ANN builds | LOW | LOW | 3/10 |
-|20 | DX | Improve benchmark labels/results export to match actual retrieval mode | LOW | LOW | 3/10 |
+| 1 | Correctness | Fix QueryCache signature to accept retrieval params | HIGH | LOW | 10/10 |
+| 2 | Architecture | Reuse `clockify_rag.caching` instead of redefined cache/rate limiter | HIGH | MEDIUM | 9/10 |
+| 3 | Performance | Make embedding ThreadPool use per-thread sessions | HIGH | MEDIUM | 9/10 |
+| 4 | Correctness | Seed FAISS training on macOS arm64 for deterministic indexes | MED | LOW | 8/10 |
+| 5 | Maintainability | Remove duplicate `ensure_index_ready` and dead code | MED | LOW | 8/10 |
+| 6 | Architecture | Split monolithic CLI into modules that import `clockify_rag` components | HIGH | HIGH | 7/10 |
+| 7 | Performance | Batch embedding futures to cap outstanding requests | MED | MED | 7/10 |
+| 8 | Logging | Ensure cache logs redact answers when configured | MED | LOW | 7/10 |
+| 9 | Testing | Add regression test covering cache params path | HIGH | LOW | 9/10 |
+| 10 | Docs | Archive or consolidate legacy deliverable markdowns | MED | MED | 6/10 |
+| 11 | Security | Add max file size guard when loading query expansions | LOW | LOW | 5/10 |
+| 12 | Evaluation | Wire evaluation script to reuse hybrid retrieval automatically | MED | MED | 6/10 |
+| 13 | Observability | Export KPI metrics via optional Prometheus endpoint | MED | HIGH | 5/10 |
+| 14 | Configuration | Document env overrides for ANN/caching in README | LOW | LOW | 5/10 |
+| 15 | UX | CLI warm-up should report failures clearly, not silently log | LOW | LOW | 4/10 |
+| 16 | Testing | Add integration test for FAISS candidate pruning with fallback | MED | MED | 6/10 |
+| 17 | Architecture | Move reranker prompt + parsing into dedicated module | MED | MED | 6/10 |
+| 18 | Security | Shim audit log rotation & configurable retention | LOW | MED | 4/10 |
+| 19 | Performance | Avoid writing full chunk bodies into query log when disabled | MED | LOW | 6/10 |
+| 20 | DX | Provide single source of truth Quickstart and deprecate others | MED | MED | 5/10 |
 
 ## RAG-Specific Recommendations
-- **Retrieval pipeline**: Refactor ANN integration to operate on candidate subsets and optionally plug in cross-encoder rerankers. Add lightweight scoring audit to ensure BM25/dense weight balancing.
-- **Chunking**: Introduce language-aware chunk size tuning and persist richer metadata (breadcrumbs, headings) for rerank prompts.
-- **Prompting**: Enforce JSON schema validation and auto-rewrite citations when LLM returns raw text. Consider fallback prompt without JSON if parsing fails repeatedly.
-- **Evaluation**: Restore `eval.py` functionality, add metric thresholds to CI, and include reranker ablations (MRR/NDCG with vs without rerank).
+- **Retrieval pipeline:** Harmonise CLI with `clockify_rag` to share cache/index builders, add regression tests for FAISS vs fallback selection, and introduce deterministic seeding across all platforms. 【F:clockify_support_cli_final.py†L394-L454】【F:clockify_rag/indexing.py†L1-L180】
+- **Chunking:** Centralise on `clockify_rag.chunking` in CLI to eliminate duplicate logic and ensure NLTK upgrades apply everywhere. 【F:clockify_support_cli_final.py†L1114-L1256】【F:clockify_rag/chunking.py†L1-L120】
+- **Prompting & citations:** Enforce JSON schema for reranker output and optionally reject answers lacking citations instead of logging a warning. 【F:clockify_support_cli_final.py†L1771-L1870】【F:clockify_support_cli_final.py†L2688-L2764】
+- **Evaluation:** Integrate evaluation metrics into CI using lightweight stubs (already present) and track NDCG/MRR over time. 【F:eval.py†L1-L160】
 
 ## Architecture Recommendations
-- Extract retriever/packer/generator components into dedicated modules (or reuse `clockify_rag` package) to shrink the 3.6k-line CLI.
-- Centralize configuration (pydantic/dataclasses) to eliminate env scattering and enable validation at startup.
-- Provide plugin registry defaults in package rather than CLI to reduce duplication and ease testing.
+- Collapse monolithic CLI into thin wrappers around `clockify_rag` modules (caching, indexing, retrieval) to prevent divergence.
+- Introduce a `retrieval.py` module within `clockify_rag` that exposes `retrieve`, `pack_snippets`, and `answer_once` so both CLI and future services reuse the same code.
+- Convert configuration to structured dataclasses or pydantic models for better validation and testability.
+- Create an internal package for CLI entrypoints (build/chat/ask) to encourage reuse in other apps or APIs.
 
 ## Performance Hotspots
-- ANN retrieval currently recomputes full dense scores (linear complexity). Optimizing this should cut average query latency by ~2-3x on large corpora.
-- LLM rerank prompt assembly always slices top candidates even when disabled—guard this path.
-- Embedding generation is strictly sequential; batching or concurrency (within rate limit) would reduce build times substantially.
+- **Embedding concurrency:** Replace global session with thread-local sessions and limit outstanding futures to `EMB_MAX_WORKERS * EMB_BATCH_SIZE` to avoid socket exhaustion. Expected 2-3× stability improvement on large builds. 【F:clockify_rag/embedding.py†L113-L192】
+- **FAISS training randomness:** Seed RNG on all code paths to avoid costly rebuilds triggered by nondeterministic QA failures. 【F:clockify_support_cli_final.py†L394-L454】
+- **Query logging:** Avoid serialising full chunk bodies when `LOG_QUERY_INCLUDE_ANSWER` is false to reduce disk I/O. 【F:clockify_support_cli_final.py†L2514-L2560】
+- **Warm-up path:** Provide async warm-up or background task to keep REPL responsive (current blocking call impacts first user input). 【F:clockify_support_cli_final.py†L3428-L3454】
 
 ## Testing Strategy
-- Add regression test for `eval.py` CLI invocation to catch syntax/indentation issues.
-- Create integration tests that vary `top_k`/`pack_top` to verify cache behavior.
-- Expand evaluation dataset coverage for tricky queries (multi-lingual, policy refusal).
-- Introduce benchmarks validating ANN performance before/after optimization and include them in CI as optional performance smoke tests.
+- Expand tests to cover cache parameter hashing, FAISS deterministic output, and reranker fallbacks.
+- Add integration smoke that exercises embedding thread pool under concurrency using a mock server to detect race conditions.
+- Provide regression suite comparing CLI and package retrieval outputs to guarantee parity after refactors.
+- Introduce benchmark assertions (max latency thresholds) using existing `benchmark.py` quick mode in CI.
