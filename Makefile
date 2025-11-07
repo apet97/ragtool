@@ -1,4 +1,4 @@
-.PHONY: help venv install selftest build chat smoke clean dev test eval benchmark benchmark-quick typecheck lint format pre-commit-install pre-commit-run regen-artifacts
+.PHONY: help venv install selftest build chat smoke clean dev test eval benchmark benchmark-quick typecheck lint format pre-commit-install pre-commit-run regen-artifacts rebuild-all
 
 help:
 	@echo "v4.1 Clockify RAG CLI - Make Targets"
@@ -8,6 +8,7 @@ help:
 	@echo "  make install             - Install dependencies (requires venv)"
 	@echo "  make build               - Build knowledge base (uses local embeddings for speed)"
 	@echo "  make regen-artifacts     - Regenerate derived artifacts (chunk_title_map.json, etc.)"
+	@echo "  make rebuild-all         - Clean and rebuild all artifacts from scratch"
 	@echo "  make selftest            - Run self-test suite"
 	@echo "  make chat                - Start interactive chat (REPL)"
 	@echo "  make smoke               - Run full smoke test suite"
@@ -65,6 +66,31 @@ regen-artifacts:
 	@echo "✅ Artifacts regenerated"
 	@echo ""
 	@echo "Note: Run this after rebuilding the knowledge base to keep chunk_title_map.json in sync"
+
+rebuild-all:
+	@echo "Rebuilding all artifacts from scratch..."
+	@echo ""
+	@echo "Step 1/3: Cleaning old artifacts..."
+	$(MAKE) clean
+	@echo ""
+	@echo "Step 2/3: Building knowledge base..."
+	$(MAKE) build
+	@echo ""
+	@echo "Step 3/3: Generating derived artifacts..."
+	$(MAKE) regen-artifacts
+	@echo ""
+	@echo "✅ Full rebuild complete!"
+	@echo ""
+	@echo "All artifacts generated:"
+	@echo "  - chunks.jsonl (text chunks)"
+	@echo "  - vecs_n.npy (normalized embeddings)"
+	@echo "  - meta.jsonl (chunk metadata)"
+	@echo "  - bm25.json (BM25 index)"
+	@echo "  - faiss.index (FAISS ANN index)"
+	@echo "  - index.meta.json (version metadata)"
+	@echo "  - chunk_title_map.json (ID→title mapping)"
+	@echo ""
+	@echo "Use 'make chat' to start querying!"
 
 selftest:
 	@echo "Running self-test suite..."

@@ -3477,7 +3477,7 @@ def warmup_on_startup():
 # ====== MAIN ======
 def main():
     # v4.1: Declare globals at function start (Section 7)
-    global EMB_BACKEND, USE_ANN, ALPHA_HYBRID, QUERY_LOG_DISABLED
+    global EMB_BACKEND, USE_ANN, ALPHA_HYBRID, QUERY_LOG_DISABLED, FAISS_CANDIDATE_MULTIPLIER
 
     ap = argparse.ArgumentParser(
         prog="clockify_support_cli",
@@ -3532,6 +3532,10 @@ def main():
                    help="ANN index: faiss (IVFFlat) or none (full-scan, default faiss)")
     c.add_argument("--alpha", type=float, default=ALPHA_HYBRID,
                    help="Hybrid scoring blend: alpha*BM25 + (1-alpha)*dense (default 0.5)")
+    c.add_argument("--no-expand", action="store_true",
+                   help="Disable query expansion (synonym substitution)")
+    c.add_argument("--faiss-multiplier", type=int, default=FAISS_CANDIDATE_MULTIPLIER,
+                   help="FAISS candidate multiplier: retrieve top_k * N for reranking (default 3)")
     c.add_argument("--json", action="store_true", help="Output answer as JSON with metrics (v4.1)")
 
     a = subparsers.add_parser("ask", help="Answer a single question and exit")
@@ -3552,6 +3556,10 @@ def main():
                    help="ANN index: faiss (IVFFlat) or none (full-scan, default faiss)")
     a.add_argument("--alpha", type=float, default=ALPHA_HYBRID,
                    help="Hybrid scoring blend: alpha*BM25 + (1-alpha)*dense (default 0.5)")
+    a.add_argument("--no-expand", action="store_true",
+                   help="Disable query expansion (synonym substitution)")
+    a.add_argument("--faiss-multiplier", type=int, default=FAISS_CANDIDATE_MULTIPLIER,
+                   help="FAISS candidate multiplier: retrieve top_k * N for reranking (default 3)")
     a.add_argument("--json", action="store_true", help="Output answer as JSON with metrics (v4.1)")
 
     # v4.1: Ollama optimization flags (Section 7)
@@ -3591,6 +3599,10 @@ def main():
     EMB_BACKEND = args.emb_backend
     USE_ANN = args.ann
     ALPHA_HYBRID = args.alpha
+
+    # Update FAISS multiplier if provided in subcommand args
+    if hasattr(args, "faiss_multiplier"):
+        FAISS_CANDIDATE_MULTIPLIER = args.faiss_multiplier
 
     # v4.1: Run selftest if requested (Section 8)
     if getattr(args, "selftest", False):
