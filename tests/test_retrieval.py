@@ -12,9 +12,11 @@ from clockify_support_cli_final import retrieve, normalize_scores_zscore, saniti
 # Check if Ollama is available (may not be in CI)
 def is_ollama_available():
     """Check if Ollama service is running and accessible."""
+    import os
     try:
         import requests
-        response = requests.get("http://127.0.0.1:11434/api/version", timeout=1)
+        ollama_url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+        response = requests.get(f"{ollama_url}/api/version", timeout=1)
         return response.ok
     except Exception:
         return False
