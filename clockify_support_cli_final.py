@@ -423,8 +423,9 @@ def build_faiss_index(vecs: np.ndarray, nlist: int = 256, metric: str = "ip") ->
             index = faiss.IndexIVFFlat(quantizer, dim, m1_nlist, faiss.METRIC_INNER_PRODUCT)
 
             # Train on small subset to minimize segfault risk
+            rng = np.random.default_rng(DEFAULT_SEED)
             if len(vecs) >= m1_train_size:
-                train_indices = np.random.choice(len(vecs), m1_train_size, replace=False)
+                train_indices = rng.choice(len(vecs), m1_train_size, replace=False)
                 train_vecs = vecs_f32[train_indices]
             else:
                 train_vecs = vecs_f32
@@ -447,8 +448,9 @@ def build_faiss_index(vecs: np.ndarray, nlist: int = 256, metric: str = "ip") ->
         index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
 
         # Train on sample to build centroids
+        rng = np.random.default_rng(DEFAULT_SEED)
         train_size = min(20000, len(vecs))
-        train_indices = np.random.choice(len(vecs), train_size, replace=False)
+        train_indices = rng.choice(len(vecs), train_size, replace=False)
         train_vecs = vecs_f32[train_indices]
         index.train(train_vecs)
         index.add(vecs_f32)
@@ -2414,18 +2416,33 @@ class QueryCache:
         self.misses = 0
         self._lock = threading.RLock()
 
-    def _hash_question(self, question: str) -> str:
-        """Generate cache key from question."""
-        return hashlib.md5(question.encode('utf-8')).hexdigest()
+    def _hash_question(self, question: str, params: dict = None) -> str:
+        """Generate cache key from question and retrieval parameters.
 
-    def get(self, question: str):
+        Args:
+            question: User question
+            params: Retrieval parameters (top_k, pack_top, use_rerank, threshold)
+        """
+        if params is None:
+            cache_input = question
+        else:
+            # Sort params for consistent hashing
+            sorted_params = sorted(params.items())
+            cache_input = question + str(sorted_params)
+        return hashlib.md5(cache_input.encode('utf-8')).hexdigest()
+
+    def get(self, question: str, params: dict = None):
         """Retrieve cached answer if available and not expired.
+
+        Args:
+            question: User question
+            params: Retrieval parameters (optional, for cache key)
 
         Returns:
             (answer, metadata) tuple if cache hit, None if cache miss
         """
         with self._lock:
-            key = self._hash_question(question)
+            key = self._hash_question(question, params)
 
             if key not in self.cache:
                 self.misses += 1
@@ -2448,16 +2465,17 @@ class QueryCache:
             logger.debug(f"[cache] HIT question_hash={key[:8]} age={age:.1f}s")
             return answer, metadata
 
-    def put(self, question: str, answer: str, metadata: dict):
+    def put(self, question: str, answer: str, metadata: dict, params: dict = None):
         """Store answer in cache.
 
         Args:
             question: User question
             answer: Generated answer
             metadata: Answer metadata (selected chunks, scores, etc.)
+            params: Retrieval parameters (optional, for cache key)
         """
         with self._lock:
-            key = self._hash_question(question)
+            key = self._hash_question(question, params)
 
             # Evict oldest entry if cache full
             if len(self.cache) >= self.maxsize and key not in self.cache:
@@ -2997,8 +3015,9 @@ def answer_once(
                 "dense": info["dense"],
                 "bm25": info["bm25"],
                 "hybrid": info["hybrid"],
-                "chunk": chunk,
             }
+            if LOG_QUERY_INCLUDE_ANSWER:
+                entry["chunk"] = chunk
             mmr_rank = mmr_rank_by_id.get(chunk_id)
             if mmr_rank is not None:
                 entry["mmr_rank"] = mmr_rank
@@ -3322,11 +3341,6 @@ def run_selftest():
 
 # ====== ARTIFACT MANAGEMENT ======
 def ensure_index_ready(retries=0):
-    """Ensure retrieval artifacts exist and load them."""
-    artifacts = [FILES["chunks"], FILES["emb"], FILES["meta"], FILES["bm25"], FILES["index_meta"]]
-    artifacts_ok = all(os.path.exists(fname) for fname in artifacts)
-# ====== REPL ======
-def ensure_index_ready(retries=0):
     """Ensure retrieval artifacts are present and return loaded index components."""
 
     artifacts_ok = True
@@ -3342,7 +3356,6 @@ def ensure_index_ready(retries=0):
         else:
             logger.error("knowledge_full.md not found")
             sys.exit(1)
-            raise SystemExit(1)
 
     result = load_index()
     if result is None:
@@ -3452,7 +3465,7 @@ def warmup_on_startup():
         )
         logger.info("info: warmup=done")
     except Exception as e:
-        logger.debug(f"Warm-up skipped: {e}")
+        logger.warning(f"warmup failed: {e}")
 
 # ====== MAIN ======
 def main():

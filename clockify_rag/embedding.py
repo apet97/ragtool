@@ -72,18 +72,20 @@ def validate_ollama_embeddings(sample_text: str = "test") -> tuple:
         return 0, False
 
 
-def _embed_single_text(index: int, text: str, sess, total: int) -> tuple:
+def _embed_single_text(index: int, text: str, retries: int, total: int) -> tuple:
     """Embed a single text using Ollama API (helper for parallel batching).
 
     Args:
         index: Index of this text in the full list
         text: Text to embed
-        sess: Requests session
+        retries: Number of retries for HTTP session
         total: Total number of texts (for logging)
 
     Returns:
         tuple: (index, embedding_list) or raises EmbeddingError
     """
+    # Rank 5 fix: Create thread-local session to avoid sharing across threads
+    sess = get_session(retries=retries)
     try:
         r = sess.post(
             f"{OLLAMA_URL}/api/embeddings",
@@ -119,7 +121,6 @@ def embed_texts(texts: list, retries=0) -> np.ndarray:
     if len(texts) == 0:
         return np.zeros((0, EMB_DIM), dtype="float32")
 
-    sess = get_session(retries=retries)
     total = len(texts)
 
     # Rank 10: Use parallel batching for speedup (3-5x faster KB builds)
@@ -128,6 +129,7 @@ def embed_texts(texts: list, retries=0) -> np.ndarray:
 
     if not use_batching:
         # Sequential fallback for small batches or single-threaded mode
+        sess = get_session(retries=retries)
         vecs = []
         for i, t in enumerate(texts):
             if (i + 1) % 100 == 0:
@@ -163,9 +165,9 @@ def embed_texts(texts: list, retries=0) -> np.ndarray:
 
     try:
         with ThreadPoolExecutor(max_workers=EMB_MAX_WORKERS) as executor:
-            # Submit all embedding tasks
+            # Submit all embedding tasks (Rank 5 fix: pass retries instead of shared session)
             futures = {
-                executor.submit(_embed_single_text, i, text, sess, total): i
+                executor.submit(_embed_single_text, i, text, retries, total): i
                 for i, text in enumerate(texts)
             }
 
