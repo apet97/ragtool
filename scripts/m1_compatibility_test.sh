@@ -50,23 +50,63 @@ echo "" | tee -a "$LOG_FILE"
 
 # Test 3: Core dependencies
 echo "[3/8] Core dependencies..." | tee -a "$LOG_FILE"
-python3 -c "import numpy; print(f'  numpy: {numpy.__version__}')" 2>&1 | tee -a "$LOG_FILE" || echo "  ❌ numpy not installed" | tee -a "$LOG_FILE"
-python3 -c "import requests; print(f'  requests: {requests.__version__}')" 2>&1 | tee -a "$LOG_FILE" || echo "  ❌ requests not installed" | tee -a "$LOG_FILE"
-python3 -c "import sentence_transformers; print(f'  sentence-transformers: {sentence_transformers.__version__}')" 2>&1 | tee -a "$LOG_FILE" || echo "  ❌ sentence-transformers not installed" | tee -a "$LOG_FILE"
-python3 -c "import torch; print(f'  torch: {torch.__version__}')" 2>&1 | tee -a "$LOG_FILE" || echo "  ❌ torch not installed" | tee -a "$LOG_FILE"
-python3 -c "import rank_bm25; print(f'  rank-bm25: installed')" 2>&1 | tee -a "$LOG_FILE" || echo "  ❌ rank-bm25 not installed" | tee -a "$LOG_FILE"
+
+# Check if running in CI environment
+CI_MODE=${CI:-false}
+if [ "$CI_MODE" = "true" ]; then
+    echo "  ℹ️  Running in CI mode - some dependencies may be skipped" | tee -a "$LOG_FILE"
+fi
+
+python3 -c "import numpy; print(f'  numpy: {numpy.__version__}')" 2>&1 | tee -a "$LOG_FILE" || echo "  ⚠️  numpy not installed" | tee -a "$LOG_FILE"
+python3 -c "import requests; print(f'  requests: {requests.__version__}')" 2>&1 | tee -a "$LOG_FILE" || echo "  ⚠️  requests not installed" | tee -a "$LOG_FILE"
+
+# Optional dependencies (may not be present in CI)
+if python3 -c "import sentence_transformers; print(f'  sentence-transformers: {sentence_transformers.__version__}')" 2>&1 | tee -a "$LOG_FILE"; then
+    :  # Success
+else
+    if [ "$CI_MODE" = "true" ]; then
+        echo "  ℹ️  sentence-transformers not installed (expected in CI)" | tee -a "$LOG_FILE"
+    else
+        echo "  ⚠️  sentence-transformers not installed" | tee -a "$LOG_FILE"
+    fi
+fi
+
+if python3 -c "import torch; print(f'  torch: {torch.__version__}')" 2>&1 | tee -a "$LOG_FILE"; then
+    :  # Success
+else
+    if [ "$CI_MODE" = "true" ]; then
+        echo "  ℹ️  torch not installed (expected in CI)" | tee -a "$LOG_FILE"
+    else
+        echo "  ⚠️  torch not installed" | tee -a "$LOG_FILE"
+    fi
+fi
+
+if python3 -c "import rank_bm25; print(f'  rank-bm25: installed')" 2>&1 | tee -a "$LOG_FILE"; then
+    :  # Success
+else
+    echo "  ⚠️  rank-bm25 not installed" | tee -a "$LOG_FILE"
+fi
+
 echo "  ✅ Core dependencies check complete" | tee -a "$LOG_FILE"
 echo "" | tee -a "$LOG_FILE"
 
 # Test 4: PyTorch MPS availability (M1 only)
 echo "[4/8] PyTorch MPS availability..." | tee -a "$LOG_FILE"
 if [ "$IS_ARM64" = true ] && [ "$SYSTEM" = "Darwin" ]; then
-    MPS_AVAILABLE=$(python3 -c "import torch; print(torch.backends.mps.is_available())" 2>&1)
-    if [ "$MPS_AVAILABLE" = "True" ]; then
-        echo "  ✅ PyTorch MPS available (GPU acceleration enabled)" | tee -a "$LOG_FILE"
+    if python3 -c "import torch" 2>/dev/null; then
+        MPS_AVAILABLE=$(python3 -c "import torch; print(torch.backends.mps.is_available())" 2>&1)
+        if [ "$MPS_AVAILABLE" = "True" ]; then
+            echo "  ✅ PyTorch MPS available (GPU acceleration enabled)" | tee -a "$LOG_FILE"
+        else
+            echo "  ⚠️  PyTorch MPS not available (will use CPU)" | tee -a "$LOG_FILE"
+            echo "  Hint: Ensure macOS 12.3+ and PyTorch 1.12+" | tee -a "$LOG_FILE"
+        fi
     else
-        echo "  ⚠️  PyTorch MPS not available (will use CPU)" | tee -a "$LOG_FILE"
-        echo "  Hint: Ensure macOS 12.3+ and PyTorch 1.12+" | tee -a "$LOG_FILE"
+        if [ "$CI_MODE" = "true" ]; then
+            echo "  ℹ️  PyTorch not installed (skipped in CI)" | tee -a "$LOG_FILE"
+        else
+            echo "  ⚠️  PyTorch not installed" | tee -a "$LOG_FILE"
+        fi
     fi
 else
     echo "  ℹ️  Skipped (not M1 Mac)" | tee -a "$LOG_FILE"
@@ -95,10 +135,14 @@ print(f'    FAISS test search successful (found {len(I[0])} results)')
         echo "  ✅ FAISS ARM64 compatible" | tee -a "$LOG_FILE"
     fi
 else
-    echo "  ⚠️  FAISS not available (application will use fallback mode)" | tee -a "$LOG_FILE"
-    if [ "$IS_ARM64" = true ]; then
-        echo "  Recommendation: Install via conda for best M1 compatibility" | tee -a "$LOG_FILE"
-        echo "    conda install -c conda-forge faiss-cpu=1.8.0" | tee -a "$LOG_FILE"
+    if [ "$CI_MODE" = "true" ]; then
+        echo "  ℹ️  FAISS not available (expected in CI, skipped)" | tee -a "$LOG_FILE"
+    else
+        echo "  ⚠️  FAISS not available (application will use fallback mode)" | tee -a "$LOG_FILE"
+        if [ "$IS_ARM64" = true ]; then
+            echo "  Recommendation: Install via conda for best M1 compatibility" | tee -a "$LOG_FILE"
+            echo "    conda install -c conda-forge faiss-cpu=1.8.0" | tee -a "$LOG_FILE"
+        fi
     fi
 fi
 echo "" | tee -a "$LOG_FILE"
@@ -141,7 +185,9 @@ echo "" | tee -a "$LOG_FILE"
 
 # Test 8: Build test (optional, only if knowledge_full.md exists)
 echo "[8/8] Build test..." | tee -a "$LOG_FILE"
-if [ -f "knowledge_full.md" ] && [ "$IS_ARM64" = true ] && [ "$SYSTEM" = "Darwin" ]; then
+if [ "$CI_MODE" = "true" ]; then
+    echo "  ℹ️  Skipped in CI (requires heavy ML dependencies)" | tee -a "$LOG_FILE"
+elif [ -f "knowledge_full.md" ] && [ "$IS_ARM64" = true ] && [ "$SYSTEM" = "Darwin" ]; then
     echo "  Building knowledge base to verify ARM64 optimization..." | tee -a "$LOG_FILE"
 
     # Clean old artifacts
