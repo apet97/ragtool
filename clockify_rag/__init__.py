@@ -83,6 +83,29 @@ from .retrieval import (
     truncate_to_token_budget,
 )
 
+# Metrics
+from .metrics import (
+    MetricsCollector,
+    MetricSnapshot,
+    AggregatedMetrics,
+    get_metrics,
+    increment_counter,
+    set_gauge,
+    observe_histogram,
+    time_operation,
+    MetricNames,
+)
+
+# Answer generation
+from .answer import (
+    apply_mmr_diversification,
+    apply_reranking,
+    extract_citations,
+    validate_citations,
+    generate_llm_answer,
+    answer_once,
+)
+
 __all__ = [
     # Version
     "__version__",
@@ -107,4 +130,12 @@ __all__ = [
     "DenseScoreStore", "retrieve", "rerank_with_llm",
     "pack_snippets", "coverage_ok", "ask_llm",
     "tokenize", "count_tokens", "truncate_to_token_budget",
+    # Metrics
+    "MetricsCollector", "MetricSnapshot", "AggregatedMetrics",
+    "get_metrics", "increment_counter", "set_gauge",
+    "observe_histogram", "time_operation", "MetricNames",
+    # Answer generation
+    "apply_mmr_diversification", "apply_reranking",
+    "extract_citations", "validate_citations",
+    "generate_llm_answer", "answer_once",
 ]
