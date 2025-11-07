@@ -13,9 +13,7 @@ from collections import Counter
 import numpy as np
 
 from .chunking import build_chunks
-from .config import (BM25_K1, BM25_B, DEFAULT_SEED, FILES, USE_ANN, ANN_NLIST, ANN_NPROBE,
-                     GEN_MODEL, EMB_MODEL, EMB_BACKEND, MMR_LAMBDA, CHUNK_CHARS,
-                     CHUNK_OVERLAP)
+from . import config
 from .embedding import embed_texts, embed_local_batch, load_embedding_cache, save_embedding_cache
 from .exceptions import BuildError
 from .utils import (build_lock, atomic_write_jsonl, atomic_save_npy, atomic_write_json,
@@ -67,7 +65,7 @@ def build_faiss_index(vecs: np.ndarray, nlist: int = 256, metric: str = "ip") ->
 
             if len(vecs) >= m1_train_size:
                 # Seed RNG for reproducible training (Rank 11)
-                rng = np.random.default_rng(DEFAULT_SEED)
+                rng = np.random.default_rng(config.DEFAULT_SEED)
                 train_indices = rng.choice(len(vecs), m1_train_size, replace=False)
                 train_vecs = vecs_f32[train_indices]
             else:
@@ -75,7 +73,7 @@ def build_faiss_index(vecs: np.ndarray, nlist: int = 256, metric: str = "ip") ->
 
             # Seed FAISS k-means for deterministic training
             # FAISS has internal randomness in k-means clustering that needs explicit seeding
-            faiss.seed(DEFAULT_SEED)
+            faiss.seed(config.DEFAULT_SEED)
             index.train(train_vecs)
             index.add(vecs_f32)
 
@@ -94,17 +92,17 @@ def build_faiss_index(vecs: np.ndarray, nlist: int = 256, metric: str = "ip") ->
 
         train_size = min(20000, len(vecs))
         # Seed RNG for reproducible training (Rank 11)
-        rng = np.random.default_rng(DEFAULT_SEED)
+        rng = np.random.default_rng(config.DEFAULT_SEED)
         train_indices = rng.choice(len(vecs), train_size, replace=False)
         train_vecs = vecs_f32[train_indices]
 
         # Seed FAISS k-means for deterministic training
         # FAISS has internal randomness in k-means clustering that needs explicit seeding
-        faiss.seed(DEFAULT_SEED)
+        faiss.seed(config.DEFAULT_SEED)
         index.train(train_vecs)
         index.add(vecs_f32)
 
-    index.nprobe = ANN_NPROBE
+    index.nprobe = config.ANN_NPROBE
 
     index_type = "IVFFlat" if hasattr(index, 'nlist') else "FlatIP"
     logger.debug(f"Built FAISS index: type={index_type}, vectors={len(vecs)}")
@@ -139,7 +137,7 @@ def load_faiss_index(path: str = None):
         faiss = _try_load_faiss()
         if faiss:
             _FAISS_INDEX = faiss.read_index(path)
-            _FAISS_INDEX.nprobe = ANN_NPROBE
+            _FAISS_INDEX.nprobe = config.ANN_NPROBE
             logger.debug(f"Loaded FAISS index from {path}")
             return _FAISS_INDEX
         return None
@@ -174,9 +172,9 @@ def build_bm25(chunks: list) -> dict:
 def bm25_scores(query: str, bm: dict, k1: float = None, b: float = None, top_k: int = None) -> np.ndarray:
     """Compute BM25 scores with optional early termination (Rank 24)."""
     if k1 is None:
-        k1 = BM25_K1
+        k1 = config.BM25_K1
     if b is None:
-        b = BM25_B
+        b = config.BM25_B
     q = tokenize(query)
     idf = bm["idf"]
     avgdl = bm["avgdl"]
@@ -257,9 +255,9 @@ def build(md_path: str, retries=0):
         logger.info("\n[1/4] Parsing and chunking...")
         chunks = build_chunks(md_path)
         logger.info(f"  Created {len(chunks)} chunks")
-        atomic_write_jsonl(FILES["chunks"], chunks)
+        atomic_write_jsonl(config.FILES["chunks"], chunks)
 
-        logger.info(f"\n[2/4] Embedding with {EMB_BACKEND}...")
+        logger.info(f"\n[2/4] Embedding with {config.EMB_BACKEND}...")
         emb_cache = load_embedding_cache()
 
         # Compute content hashes
@@ -286,7 +284,7 @@ def build(md_path: str, retries=0):
             texts_to_embed = [chunks[i]["text"] for i in cache_miss_indices]
             logger.info(f"  Computing {len(texts_to_embed)} new embeddings...")
 
-            if EMB_BACKEND == "local":
+            if config.EMB_BACKEND == "local":
                 new_embeddings = embed_local_batch(texts_to_embed, normalize=False)
             else:
                 new_embeddings = embed_texts(texts_to_embed, retries=retries)
@@ -295,15 +293,47 @@ def build(md_path: str, retries=0):
                 chunk_hash = chunk_hashes[idx]
                 emb_cache[chunk_hash] = new_embeddings[i].astype(np.float32)
 
-        # Reconstruct full embedding matrix
+        # Reconstruct full embedding matrix with dimension validation
+        # Compute expected dimension based on current backend
+        expected_dim = config.EMB_DIM_LOCAL if config.EMB_BACKEND == "local" else config.EMB_DIM_OLLAMA
+
         vecs = []
         new_emb_idx = 0
         for i in range(len(chunks)):
             if cache_hits[i] is not None:
-                vecs.append(cache_hits[i])
+                cached_emb = cache_hits[i]
+                # Defensive check: validate cached embedding dimension
+                if len(cached_emb) != expected_dim:
+                    raise BuildError(
+                        f"Cached embedding {i} has dimension {len(cached_emb)}, "
+                        f"expected {expected_dim} for backend={config.EMB_BACKEND}. "
+                        f"This should have been filtered by load_embedding_cache(). "
+                        f"Try deleting {config.FILES['emb_cache']} and rebuilding."
+                    )
+                vecs.append(cached_emb)
             else:
-                vecs.append(new_embeddings[new_emb_idx])
+                new_emb = new_embeddings[new_emb_idx]
+                # Validate new embedding dimension
+                if len(new_emb) != expected_dim:
+                    raise BuildError(
+                        f"New embedding {i} has dimension {len(new_emb)}, "
+                        f"expected {expected_dim} for backend={config.EMB_BACKEND}. "
+                        f"Check {config.EMB_BACKEND} configuration or model output."
+                    )
+                vecs.append(new_emb)
                 new_emb_idx += 1
+
+        # Final sanity check before array construction
+        if vecs:
+            first_dim = len(vecs[0])
+            for idx, vec in enumerate(vecs):
+                if len(vec) != first_dim:
+                    raise BuildError(
+                        f"Dimension mismatch at index {idx}: "
+                        f"expected {first_dim}, got {len(vec)}. "
+                        f"Cannot mix embeddings with different dimensions."
+                    )
+
         vecs = np.array(vecs, dtype=np.float32)
 
         if cache_miss_indices:
@@ -313,7 +343,7 @@ def build(md_path: str, retries=0):
         norms = np.linalg.norm(vecs, axis=1, keepdims=True)
         norms[norms == 0] = 1e-9
         vecs_n = (vecs / norms).astype("float32")
-        atomic_save_npy(vecs_n, FILES["emb"])
+        atomic_save_npy(vecs_n, config.FILES["emb"])
         logger.info(f"  Saved {vecs_n.shape} embeddings (normalized)")
 
         # Write metadata
@@ -321,21 +351,21 @@ def build(md_path: str, retries=0):
             {"id": c["id"], "title": c["title"], "url": c["url"], "section": c["section"]}
             for c in chunks
         ]
-        atomic_write_jsonl(FILES["meta"], meta_lines)
+        atomic_write_jsonl(config.FILES["meta"], meta_lines)
 
         logger.info("\n[3/4] Building BM25 index...")
         bm = build_bm25(chunks)
-        atomic_write_json(FILES["bm25"], bm)
+        atomic_write_json(config.FILES["bm25"], bm)
         logger.info(f"  Indexed {len(bm['idf'])} unique terms")
 
         # Optional FAISS
-        if USE_ANN == "faiss":
+        if config.USE_ANN == "faiss":
             try:
                 logger.info("\n[3.1/4] Building FAISS ANN index...")
-                faiss_index = build_faiss_index(vecs_n, nlist=ANN_NLIST)
+                faiss_index = build_faiss_index(vecs_n, nlist=config.ANN_NLIST)
                 if faiss_index is not None:
-                    save_faiss_index(faiss_index, FILES["faiss_index"])
-                    logger.info(f"  Saved FAISS index to {FILES['faiss_index']}")
+                    save_faiss_index(faiss_index, config.FILES["faiss_index"])
+                    logger.info(f"  Saved FAISS index to {config.FILES['faiss_index']}")
             except Exception as e:
                 logger.warning(f"  FAISS index build failed: {e}")
 
@@ -347,13 +377,13 @@ def build(md_path: str, retries=0):
             "chunks": len(chunks),
             "emb_rows": int(vecs_n.shape[0]),
             "bm25_docs": len(bm["doc_lens"]),
-            "gen_model": GEN_MODEL,
-            "emb_model": EMB_MODEL if EMB_BACKEND == "ollama" else "all-MiniLM-L6-v2",
-            "emb_backend": EMB_BACKEND,
-            "ann": USE_ANN,
+            "gen_model": config.GEN_MODEL,
+            "emb_model": config.EMB_MODEL if config.EMB_BACKEND == "ollama" else "all-MiniLM-L6-v2",
+            "emb_backend": config.EMB_BACKEND,
+            "ann": config.USE_ANN,
             "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
-        atomic_write_json(FILES["index_meta"], index_meta)
+        atomic_write_json(config.FILES["index_meta"], index_meta)
         logger.info(f"  Saved index metadata")
 
         logger.info("\n[4/4] Done.")
@@ -361,32 +391,82 @@ def build(md_path: str, retries=0):
 
 
 def load_index():
-    """Load all index artifacts and return them."""
-    if not os.path.exists(FILES["index_meta"]):
+    """Load all index artifacts with dimension validation.
+
+    FIX: Validates that stored embeddings match the current config.EMB_BACKEND and config.EMB_DIM
+    to prevent runtime crashes from dimension mismatches (e.g., switching from
+    local 384-dim to ollama 768-dim without rebuilding).
+
+    Returns:
+        dict with index artifacts, or None if validation fails (requiring rebuild)
+    """
+    if not os.path.exists(config.FILES["index_meta"]):
         logger.warning("[rebuild] index.meta.json missing")
         return None
 
-    with open(FILES["index_meta"], encoding="utf-8") as f:
+    with open(config.FILES["index_meta"], encoding="utf-8") as f:
         meta = json.load(f)
+
+    # Validate backend compatibility
+    stored_backend = meta.get("emb_backend")
+    stored_model = meta.get("emb_model")
+
+    if stored_backend and stored_backend != config.EMB_BACKEND:
+        logger.error(
+            f"❌ Index backend mismatch: stored={stored_backend}, current={config.EMB_BACKEND}"
+        )
+        logger.error(
+            f"   Stored model: {stored_model}"
+        )
+        logger.error(
+            f"   Current model: {config.EMB_MODEL if config.EMB_BACKEND == 'ollama' else 'all-MiniLM-L6-v2'}"
+        )
+        logger.error(
+            f"   Expected dimension: {config.EMB_DIM}"
+        )
+        logger.error("")
+        logger.error(f"💡 Solution: Rebuild the index with the current backend:")
+        logger.error(f"   python3 clockify_support_cli.py build knowledge_full.md")
+        logger.error("")
+        return None
 
     # Load chunks
     chunks = []
-    with open(FILES["chunks"], encoding="utf-8") as f:
+    with open(config.FILES["chunks"], encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 chunks.append(json.loads(line))
 
     # Load embeddings
-    vecs_n = np.load(FILES["emb"])
+    vecs_n = np.load(config.FILES["emb"])
+
+    # Validate embedding dimensions
+    # Compute expected dimension based on current backend
+    expected_dim = config.EMB_DIM_LOCAL if config.EMB_BACKEND == "local" else config.EMB_DIM_OLLAMA
+    stored_dim = vecs_n.shape[1] if len(vecs_n.shape) > 1 else 0
+
+    if stored_dim != expected_dim:
+        logger.error(
+            f"❌ Embedding dimension mismatch: stored={stored_dim}, expected={expected_dim} "
+            f"(backend={config.EMB_BACKEND})"
+        )
+        logger.error(
+            f"   This usually happens after switching embedding backends without rebuilding."
+        )
+        logger.error("")
+        logger.error(f"💡 Solution: Rebuild the index:")
+        logger.error(f"   python3 clockify_support_cli.py build knowledge_full.md")
+        logger.error("")
+        return None
 
     # Load BM25
-    with open(FILES["bm25"], encoding="utf-8") as f:
+    with open(config.FILES["bm25"], encoding="utf-8") as f:
         bm = json.load(f)
 
     # Optional FAISS
     faiss_index = None
-    if USE_ANN == "faiss" and os.path.exists(FILES["faiss_index"]):
-        faiss_index = load_faiss_index(FILES["faiss_index"])
+    if config.USE_ANN == "faiss" and os.path.exists(config.FILES["faiss_index"]):
+        faiss_index = load_faiss_index(config.FILES["faiss_index"])
 
     # Build chunk dict
     chunks_dict = {c["id"]: c for c in chunks}
