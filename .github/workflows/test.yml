@@ -60,7 +60,7 @@ jobs:
 
     - name: Upload M1 test logs (macOS only)
       if: matrix.os == 'macos-14'
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: m1-compatibility-log
         path: m1_compatibility.log
