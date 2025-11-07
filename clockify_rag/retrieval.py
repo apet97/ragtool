@@ -377,8 +377,11 @@ def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0,
             qv_n.reshape(1, -1).astype("float32"),
             max(config.ANN_CANDIDATE_MIN, top_k * config.FAISS_CANDIDATE_MULTIPLIER),
         )
-        candidate_idx = [int(i) for i in I[0] if 0 <= i < n_chunks]
-        dense_from_ann = np.array([float(d) for d in D[0][: len(candidate_idx)]], dtype=np.float32)
+        # Filter indices and distances together to maintain alignment
+        # (prevents misalignment when FAISS returns -1 sentinels)
+        valid_pairs = [(int(i), float(d)) for i, d in zip(I[0], D[0]) if 0 <= i < n_chunks]
+        candidate_idx = [i for i, _ in valid_pairs]
+        dense_from_ann = np.array([d for _, d in valid_pairs], dtype=np.float32)
 
         dense_scores = dense_from_ann
         dense_scores_full = None
