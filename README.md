@@ -449,6 +449,7 @@ ANN                     # ANN backend: "faiss" or "none" (default: faiss)
 ANN_NLIST               # FAISS clusters (default: 64 for M1, 256 otherwise)
 ANN_NPROBE              # FAISS search clusters (default: 16)
 ALPHA                   # Hybrid retrieval weight (default: 0.5)
+FAISS_CANDIDATE_MULTIPLIER  # ANN candidate multiplier (default: 3)
 ```
 
 ### Timeouts
@@ -460,6 +461,36 @@ CHAT_READ_TIMEOUT       # Chat read timeout (default: 120)
 RERANK_READ_TIMEOUT     # Rerank timeout (default: 180)
 ```
 
+### Query Logging
+```bash
+RAG_LOG_FILE            # Log file path (default: rag_queries.jsonl)
+RAG_NO_LOG              # Disable logging: 1/0 (default: 0)
+RAG_LOG_INCLUDE_ANSWER  # Include answer text: 1/0 (default: 1)
+RAG_LOG_ANSWER_PLACEHOLDER  # Placeholder when answer redacted (default: [REDACTED])
+RAG_LOG_INCLUDE_CHUNKS  # Include chunk text: 1/0 (default: 0 for security)
+```
+See [LOGGING_CONFIG.md](LOGGING_CONFIG.md) for comprehensive logging documentation.
+
+### Caching & Rate Limiting
+```bash
+CACHE_MAXSIZE           # Query cache size (default: 100)
+CACHE_TTL               # Cache TTL in seconds (default: 3600)
+RATE_LIMIT_REQUESTS     # Max requests per window (default: 10)
+RATE_LIMIT_WINDOW       # Window in seconds (default: 60)
+```
+
+### Query Expansion
+```bash
+CLOCKIFY_QUERY_EXPANSIONS   # Path to custom query_expansions.json
+MAX_QUERY_EXPANSION_FILE_SIZE  # Max file size in bytes (default: 10485760 / 10MB)
+```
+
+### Build & Warm-up
+```bash
+BUILD_LOCK_TTL_SEC      # Build lock timeout (default: 900)
+WARMUP                  # Enable warm-up: 1/0 (default: 1)
+```
+
 ### M1-Specific
 ```bash
 # Force FAISS fallback (useful if FAISS crashes on M1)
@@ -467,6 +498,32 @@ export USE_ANN=none
 
 # Enable PyTorch MPS fallback
 export PYTORCH_ENABLE_MPS_FALLBACK=1
+```
+
+### Example Configurations
+
+**Production (Privacy-Preserving)**:
+```bash
+export RAG_LOG_FILE="/var/log/rag/queries.jsonl"
+export RAG_LOG_INCLUDE_ANSWER=0
+export RAG_LOG_INCLUDE_CHUNKS=0
+export CACHE_MAXSIZE=500
+export CACHE_TTL=7200
+```
+
+**Development (Full Logging)**:
+```bash
+export RAG_LOG_FILE="dev_queries.jsonl"
+export RAG_LOG_INCLUDE_ANSWER=1
+export RAG_LOG_INCLUDE_CHUNKS=1
+export WARMUP=0
+```
+
+**Performance Tuning**:
+```bash
+export CTX_BUDGET=4000
+export FAISS_CANDIDATE_MULTIPLIER=5
+export CACHE_MAXSIZE=200
 ```
 
 ## Production Status
