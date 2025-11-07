@@ -2191,7 +2191,7 @@ def build(md_path: str, retries=0):
 
         # Invalidate global FAISS cache to force reload of new index
         global _FAISS_INDEX
-        with _FAISS_INDEX_LOCK:
+        with _FAISS_LOCK:
             _FAISS_INDEX = None
             logger.debug("  Reset FAISS cache")
 
