@@ -160,6 +160,9 @@ LOG_QUERY_INCLUDE_ANSWER = os.environ.get("RAG_LOG_INCLUDE_ANSWER", "1").lower()
 LOG_QUERY_ANSWER_PLACEHOLDER = os.environ.get("RAG_LOG_ANSWER_PLACEHOLDER", "[REDACTED]")
 LOG_QUERY_INCLUDE_CHUNKS = os.environ.get("RAG_LOG_INCLUDE_CHUNKS", "0").lower() in {"1", "true", "yes", "on"}  # Redact chunk text by default for security/privacy
 
+# Citation validation configuration
+STRICT_CITATIONS = os.environ.get("RAG_STRICT_CITATIONS", "0").lower() in {"1", "true", "yes", "on"}  # Refuse answers without citations (improves trust in regulated environments)
+
 FILES = {
     "chunks": "chunks.jsonl",
     "emb": "vecs_n.npy",  # Pre-normalized embeddings (float32)
@@ -2628,18 +2631,25 @@ def generate_llm_answer(question, context_block, seed, num_ctx, num_predict, ret
         if packed_ids is not None and len(packed_ids) > 0:
             has_citations = bool(extract_citations(answer))
             if not has_citations and answer != REFUSAL_STR:
-                # No citations found in non-JSON response - potential policy violation
-                logger.warning(f"[llm_fallback] Raw response lacks citations, may violate policy")
-                # Could trigger refusal here for strict enforcement:
-                # answer = REFUSAL_STR
-                # But for now, just log the warning
+                if STRICT_CITATIONS:
+                    logger.warning(f"[llm_fallback] Raw response lacks citations in strict mode, refusing answer")
+                    answer = REFUSAL_STR
+                    confidence = None
+                else:
+                    # No citations found in non-JSON response - potential policy violation
+                    logger.warning(f"[llm_fallback] Raw response lacks citations, may violate policy")
 
-    # Rank 9: Validate citations match packed chunks
-    if packed_ids is not None:
+    # Rank 9: Validate citations match packed chunks (only if not already refused)
+    if packed_ids is not None and answer != REFUSAL_STR:
         is_valid, valid_cits, invalid_cits = validate_citations(answer, packed_ids)
         if not is_valid and invalid_cits:
-            logger.warning(f"[citation_validation] Invalid citations: {invalid_cits} (valid: {packed_ids[:10]}...)")
-            # Log warning but don't fail - some models may use different citation formats
+            if STRICT_CITATIONS:
+                logger.warning(f"[citation_validation] Invalid citations in strict mode: {invalid_cits}, refusing answer")
+                answer = REFUSAL_STR
+                confidence = None
+            else:
+                logger.warning(f"[citation_validation] Invalid citations: {invalid_cits} (valid: {packed_ids[:10]}...)")
+                # Log warning but don't fail - some models may use different citation formats
 
     return answer, timing, confidence
 
@@ -2808,13 +2818,13 @@ def answer_once(
                 chunk_id = chunk.get("id")
                 if chunk_id is None:
                     continue
-                retrieved_chunks.append(
-                    {
-                        "id": chunk_id,
-                        "score": float(dense_scores[idx]),
-                        "chunk": chunk,
-                    }
-                )
+                entry = {
+                    "id": chunk_id,
+                    "score": float(dense_scores[idx]),
+                }
+                if LOG_QUERY_INCLUDE_CHUNKS:
+                    entry["chunk"] = chunk
+                retrieved_chunks.append(entry)
 
             log_query(
                 query=question,

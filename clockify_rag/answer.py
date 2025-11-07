@@ -27,6 +27,7 @@ from .config import (
     DEFAULT_RETRIES,
     MMR_LAMBDA,
     REFUSAL_STR,
+    STRICT_CITATIONS,
 )
 from .retrieval import (
     retrieve,
@@ -259,13 +260,24 @@ def generate_llm_answer(
         has_citations = bool(extract_citations(answer))
 
         if not has_citations and answer != REFUSAL_STR:
-            logger.warning("Answer lacks citations (expected format: [id_123, id_456])")
+            if STRICT_CITATIONS:
+                logger.warning("Answer lacks citations in strict mode, refusing answer")
+                answer = REFUSAL_STR
+                confidence = None
+            else:
+                logger.warning("Answer lacks citations (expected format: [id_123, id_456])")
 
-        # Validate citations reference actual chunks
-        is_valid, valid_cites, invalid_cites = validate_citations(answer, packed_ids)
+        # Validate citations reference actual chunks (only if not already refused)
+        if answer != REFUSAL_STR:
+            is_valid, valid_cites, invalid_cites = validate_citations(answer, packed_ids)
 
-        if invalid_cites:
-            logger.warning(f"Answer contains invalid citations: {invalid_cites}")
+            if invalid_cites:
+                if STRICT_CITATIONS:
+                    logger.warning(f"Answer contains invalid citations in strict mode: {invalid_cites}, refusing answer")
+                    answer = REFUSAL_STR
+                    confidence = None
+                else:
+                    logger.warning(f"Answer contains invalid citations: {invalid_cites}")
 
     return answer, timing, confidence
 

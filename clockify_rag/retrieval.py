@@ -121,7 +121,7 @@ Where confidence is 0-100 indicating your certainty based on the snippets:
 Return ONLY valid JSON. No markdown formatting, no ```json blocks."""
 
 RERANK_PROMPT = """You rank passages for a Clockify support answer. Score each 0.0–1.0 strictly.
-Output JSON only: [{"id":"<chunk_id>","score":0.82}, ...].
+Output JSON only: [{{"id":"<chunk_id>","score":0.82}}, ...].
 
 QUESTION:
 {q}

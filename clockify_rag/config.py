@@ -95,6 +95,9 @@ LOG_QUERY_INCLUDE_ANSWER = _get_bool_env("RAG_LOG_INCLUDE_ANSWER", "1")
 LOG_QUERY_ANSWER_PLACEHOLDER = os.environ.get("RAG_LOG_ANSWER_PLACEHOLDER", "[REDACTED]")
 LOG_QUERY_INCLUDE_CHUNKS = _get_bool_env("RAG_LOG_INCLUDE_CHUNKS", "0")  # Redact chunk text by default for security/privacy
 
+# Citation validation configuration
+STRICT_CITATIONS = _get_bool_env("RAG_STRICT_CITATIONS", "0")  # Refuse answers without citations (improves trust in regulated environments)
+
 # ====== FILE PATHS ======
 FILES = {
     "chunks": "chunks.jsonl",
