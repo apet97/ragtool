@@ -20,6 +20,19 @@ import threading
 import time
 from pathlib import Path
 
+# Check if FAISS is available (may not be in CI)
+try:
+    import faiss
+    FAISS_AVAILABLE = True
+except ImportError:
+    FAISS_AVAILABLE = False
+
+# Skip all tests in this module if FAISS not available
+pytestmark = pytest.mark.skipif(
+    not FAISS_AVAILABLE,
+    reason="FAISS not installed (expected in CI, install via conda for M1 compatibility)"
+)
+
 # Import from package
 from clockify_rag import config
 from clockify_rag.indexing import build_faiss_index, load_faiss_index
