@@ -2566,19 +2566,30 @@ def log_query(query, answer, retrieved_chunks, latency_ms, refused=False, metada
     if QUERY_LOG_DISABLED:
         return
 
+    # Priority #19: Build minimal representations when chunks disabled to avoid unnecessary copying
     normalized_chunks = []
     for chunk in retrieved_chunks:
         if isinstance(chunk, dict):
-            normalized = chunk.copy()
-            chunk_id = normalized.get("id") or normalized.get("chunk_id")
-            normalized["id"] = chunk_id
-            normalized["dense"] = float(normalized.get("dense", normalized.get("score", 0.0)))
-            normalized["bm25"] = float(normalized.get("bm25", 0.0))
-            normalized["hybrid"] = float(normalized.get("hybrid", normalized["dense"]))
-            # Rank 12: Redact chunk text for security/privacy unless explicitly enabled
-            if not LOG_QUERY_INCLUDE_CHUNKS:
-                normalized.pop("chunk", None)  # Remove full chunk text
-                normalized.pop("text", None)   # Remove text field if present
+            chunk_id = chunk.get("id") or chunk.get("chunk_id")
+            dense = float(chunk.get("dense", chunk.get("score", 0.0)))
+            bm25 = float(chunk.get("bm25", 0.0))
+            hybrid = float(chunk.get("hybrid", dense))
+
+            if LOG_QUERY_INCLUDE_CHUNKS:
+                # Full copy with text when chunks enabled
+                normalized = chunk.copy()
+                normalized["id"] = chunk_id
+                normalized["dense"] = dense
+                normalized["bm25"] = bm25
+                normalized["hybrid"] = hybrid
+            else:
+                # Minimal representation without copying full chunk (Priority #19 optimization)
+                normalized = {
+                    "id": chunk_id,
+                    "dense": dense,
+                    "bm25": bm25,
+                    "hybrid": hybrid,
+                }
         else:
             normalized = {
                 "id": chunk,
