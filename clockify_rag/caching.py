@@ -165,10 +165,12 @@ class QueryCache:
                 logger.debug(f"[cache] EVICT question_hash={oldest[:8]} (LRU)")
 
             # Store entry with timestamp
+            # FIX: Deep copy metadata to prevent mutation leaks
+            import copy
             timestamp = time.time()
-            metadata = dict(metadata) if metadata is not None else {}
-            metadata["timestamp"] = timestamp
-            self.cache[key] = (answer, metadata, timestamp)
+            metadata_copy = copy.deepcopy(metadata) if metadata is not None else {}
+            metadata_copy["timestamp"] = timestamp
+            self.cache[key] = (answer, metadata_copy, timestamp)
 
             # Update access order
             if key in self.access_order:
@@ -257,6 +259,23 @@ def log_query(query: str, answer: str, retrieved_chunks: list, latency_ms: float
     avg_chunk_score = (sum(primary_scores) / len(primary_scores)) if primary_scores else 0.0
     max_chunk_score = max(primary_scores) if primary_scores else 0.0
 
+    # FIX: Sanitize metadata to prevent chunk text leaks
+    # Deep copy and remove any 'text'/'chunk' fields from nested structures
+    import copy
+    sanitized_metadata = copy.deepcopy(metadata) if metadata else {}
+    if not LOG_QUERY_INCLUDE_CHUNKS and isinstance(sanitized_metadata, dict):
+        # Remove chunk text from any nested chunk dicts in metadata
+        for key in list(sanitized_metadata.keys()):
+            val = sanitized_metadata[key]
+            if isinstance(val, dict):
+                val.pop("text", None)
+                val.pop("chunk", None)
+            elif isinstance(val, list):
+                for item in val:
+                    if isinstance(item, dict):
+                        item.pop("text", None)
+                        item.pop("chunk", None)
+
     log_entry = {
         "timestamp": time.time(),
         "timestamp_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -273,7 +292,7 @@ def log_query(query: str, answer: str, retrieved_chunks: list, latency_ms: float
         "retrieved_chunks": normalized_chunks,
         "avg_chunk_score": avg_chunk_score,
         "max_chunk_score": max_chunk_score,
-        "metadata": metadata or {},
+        "metadata": sanitized_metadata,
     }
 
     if LOG_QUERY_INCLUDE_ANSWER:

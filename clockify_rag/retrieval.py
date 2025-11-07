@@ -36,6 +36,8 @@ _FAISS_INDEX = None
 _FAISS_INDEX_LOCK = __import__('threading').RLock()
 
 # ====== RETRIEVAL PROFILING ======
+# FIX: Add thread-safe lock for concurrent access to profiling state
+_RETRIEVE_PROFILE_LOCK = __import__('threading').RLock()
 RETRIEVE_PROFILE_LAST = {}
 
 # ====== PROMPTS ======
@@ -499,7 +501,9 @@ def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0,
     dense_computed_total = dense_computed or (dense_total if (used_hnsw or not _FAISS_INDEX) else 0)
     dense_reused = dense_total - dense_computed_total
 
-    RETRIEVE_PROFILE_LAST = {
+    # FIX: Thread-safe update of profiling state
+    global RETRIEVE_PROFILE_LAST
+    profile_data = {
         "used_faiss": bool(_FAISS_INDEX),
         "used_hnsw": used_hnsw,
         "candidates": int(len(candidate_idx)),
@@ -510,14 +514,17 @@ def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0,
         "dense_dot_time_ms": round(dot_elapsed * 1000, 3),
     }
 
+    with _RETRIEVE_PROFILE_LOCK:
+        RETRIEVE_PROFILE_LAST = profile_data
+
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
             "profile: retrieval ann=%s reused=%d computed=%d total=%d dot_ms=%.3f",
             "faiss" if _FAISS_INDEX else ("hnsw" if used_hnsw else "linear"),
-            RETRIEVE_PROFILE_LAST["dense_reused"],
-            RETRIEVE_PROFILE_LAST["dense_computed"],
+            profile_data["dense_reused"],
+            profile_data["dense_computed"],
             dense_total,
-            RETRIEVE_PROFILE_LAST["dense_dot_time_ms"],
+            profile_data["dense_dot_time_ms"],
         )
 
     return filtered, {

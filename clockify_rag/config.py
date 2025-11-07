@@ -28,11 +28,19 @@ BM25_B = float(os.environ.get("BM25_B", "0.65"))
 # ====== LLM CONFIG ======
 DEFAULT_NUM_CTX = 8192
 DEFAULT_NUM_PREDICT = 512
-DEFAULT_RETRIES = 0
+# FIX: Increase default retries from 0 to 2 for remote Ollama resilience
+# Remote endpoints (especially over VPN) benefit from transient error retry
+# Can be overridden via DEFAULT_RETRIES env var or --retries CLI flag
+DEFAULT_RETRIES = int(os.environ.get("DEFAULT_RETRIES", "2"))  # Was 0, now 2
 
 # ====== MMR & CONTEXT BUDGET ======
 MMR_LAMBDA = 0.7
-CTX_TOKEN_BUDGET = int(os.environ.get("CTX_BUDGET", "2800"))  # ~11,200 chars, overridable
+# FIX: Increase context budget from 2800 to 6000 tokens to better utilize Qwen 32B's capacity
+# Qwen 32B has 32K context window; we reserve 60% for snippets (pack_snippets enforces this)
+# Old: 2800 tokens (~11K chars) was too conservative, causing unnecessary truncation
+# New: 6000 tokens (~24K chars) allows more context while leaving room for Q+A
+# Can be overridden via CTX_BUDGET env var
+CTX_TOKEN_BUDGET = int(os.environ.get("CTX_BUDGET", "6000"))  # Was 2800, now 6000
 
 # ====== EMBEDDINGS BACKEND (v4.1) ======
 EMB_BACKEND = os.environ.get("EMB_BACKEND", "local")  # "local" or "ollama"

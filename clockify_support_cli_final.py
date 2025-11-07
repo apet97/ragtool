@@ -50,223 +50,86 @@ from contextlib import contextmanager
 import numpy as np
 import requests
 
-# Priority #2: Use package cache/rate limiter instead of duplicates (ROI 9/10)
+# Import all configuration and core functionality from package
+import clockify_rag.config as config
 from clockify_rag.caching import QueryCache, RateLimiter, get_query_cache, get_rate_limiter
+from clockify_rag.chunking import build_chunks, sliding_chunks
+from clockify_rag.embedding import embed_texts
+from clockify_rag.indexing import build, load_index, build_bm25, bm25_scores, build_faiss_index
+from clockify_rag.retrieval import (
+    expand_query,
+    embed_query,
+    retrieve,
+    pack_snippets,
+    coverage_ok,
+    ask_llm,
+    count_tokens,
+)
+from clockify_rag.metrics import get_metrics, time_operation
+from clockify_rag.utils import validate_ollama_url, compute_sha256
 
-# Rank 23: NLTK for sentence-aware chunking
-try:
-    import nltk
-    # Lazy download of punkt tokenizer data (only if needed)
+# Rank 23: NLTK for sentence-aware chunking (with optional download control)
+_NLTK_AVAILABLE = False
+_NLTK_DOWNLOAD_ATTEMPTED = False
+
+def _ensure_nltk(auto_download=None):
+    """Ensure NLTK is available, with optional download control for offline environments."""
+    global _NLTK_AVAILABLE, _NLTK_DOWNLOAD_ATTEMPTED
+
+    if _NLTK_AVAILABLE:
+        return True
+
+    try:
+        import nltk
+    except ImportError:
+        logger.warning("NLTK not installed. Chunking will use simpler fallback.")
+        return False
+
+    # Check if we already have punkt
     try:
         nltk.data.find('tokenizers/punkt')
+        _NLTK_AVAILABLE = True
+        return True
     except LookupError:
-        nltk.download('punkt', quiet=True)
-        nltk.download('punkt_tab', quiet=True)  # For newer NLTK versions
-    _NLTK_AVAILABLE = True
-except ImportError:
-    _NLTK_AVAILABLE = False
+        pass
+
+    # Determine if we should download
+    if auto_download is None:
+        # Check environment variable (default: allow download unless explicitly disabled)
+        auto_download = os.environ.get("NLTK_AUTO_DOWNLOAD", "1").lower() not in {"0", "false", "no", "off"}
+
+    if auto_download and not _NLTK_DOWNLOAD_ATTEMPTED:
+        _NLTK_DOWNLOAD_ATTEMPTED = True
+        logger.info("Downloading NLTK punkt tokenizer (one-time setup)...")
+        try:
+            nltk.download('punkt', quiet=True)
+            nltk.download('punkt_tab', quiet=True)  # For newer NLTK versions
+            _NLTK_AVAILABLE = True
+            logger.info("NLTK punkt downloaded successfully.")
+            return True
+        except Exception as e:
+            logger.warning(f"NLTK download failed ({e}). Using simpler chunking fallback.")
+            return False
+    else:
+        if not auto_download:
+            logger.warning("NLTK auto-download disabled (NLTK_AUTO_DOWNLOAD=0). Using simpler chunking fallback.")
+        return False
 
 # ====== MODULE LOGGER ======
 logger = logging.getLogger(__name__)
 
-# ====== CUSTOM EXCEPTIONS ======
-class EmbeddingError(Exception):
-    """Embedding generation failed"""
-    pass
+# ====== IMPORT EXCEPTIONS FROM PACKAGE ======
+from clockify_rag.exceptions import EmbeddingError, LLMError, IndexLoadError, BuildError
 
-class LLMError(Exception):
-    """LLM call failed"""
-    pass
+# ====== CLI-SPECIFIC CONFIG (inherits from package) ======
+# All core configuration now imported from clockify_rag.config
+# Reference as: config.OLLAMA_URL, config.GEN_MODEL, etc.
 
-class IndexLoadError(Exception):
-    """Index loading or validation failed"""
-    pass
-
-class BuildError(Exception):
-    """Knowledge base build failed"""
-    pass
-
-# ====== CONFIG ======
-# These are module-level defaults, overridable via main()
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
-GEN_MODEL = os.environ.get("GEN_MODEL", "qwen2.5:32b")
-EMB_MODEL = os.environ.get("EMB_MODEL", "nomic-embed-text")
-
-CHUNK_CHARS = 1600
-CHUNK_OVERLAP = 200
-DEFAULT_TOP_K = 12
-DEFAULT_PACK_TOP = 6
-DEFAULT_THRESHOLD = 0.30
-DEFAULT_SEED = 42
-
-# BM25 parameters (tuned for technical documentation)
-# Lower k1 (1.2→1.0): Reduces term frequency saturation for repeated technical terms
-# Lower b (0.75→0.65): Reduces length normalization penalty for longer docs
-BM25_K1 = float(os.environ.get("BM25_K1", "1.0"))
-BM25_B = float(os.environ.get("BM25_B", "0.65"))
-DEFAULT_NUM_CTX = 8192
-DEFAULT_NUM_PREDICT = 512
-DEFAULT_RETRIES = 0
-MMR_LAMBDA = 0.7
-CTX_TOKEN_BUDGET = int(os.environ.get("CTX_BUDGET", "2800"))  # ~11,200 chars, overridable
-
-# Quick Win #6: Extracted magic numbers to config
-FAISS_CANDIDATE_MULTIPLIER = 3  # Retrieve top_k * 3 candidates for reranking
-ANN_CANDIDATE_MIN = 200  # Minimum candidates even if top_k is small
-RERANK_SNIPPET_MAX_CHARS = 500  # Truncate chunk text for reranking prompt
-RERANK_MAX_CHUNKS = 12  # Maximum chunks to send to reranking
-COVERAGE_MIN_CHUNKS = 2  # Minimum chunks above threshold to proceed
-
-# ====== EMBEDDINGS BACKEND (v4.1) ======
-EMB_BACKEND = os.environ.get("EMB_BACKEND", "local")  # "local" or "ollama"
-
-# Embedding dimensions:
-# - local (SentenceTransformer all-MiniLM-L6-v2): 384-dim
-# - ollama (nomic-embed-text): 768-dim
-EMB_DIM_LOCAL = 384
-EMB_DIM_OLLAMA = 768
-EMB_DIM = EMB_DIM_LOCAL if EMB_BACKEND == "local" else EMB_DIM_OLLAMA
-
-# ====== ANN (Approximate Nearest Neighbors) (v4.1) ======
-USE_ANN = os.environ.get("ANN", "faiss")  # "faiss" or "none"
-# Note: nlist reduced from 256→64 for arm64 macOS stability (avoid IVF training segfault)
-ANN_NLIST = int(os.environ.get("ANN_NLIST", "64"))  # IVF clusters (reduced for stability)
-ANN_NPROBE = int(os.environ.get("ANN_NPROBE", "16"))  # clusters to search
-
-# ====== HYBRID SCORING (v4.1) ======
-ALPHA_HYBRID = float(os.environ.get("ALPHA", "0.5"))  # 0.5 = BM25 and dense equally weighted
-
-# ====== KPI TIMINGS (v4.1) ======
-class KPI:
-    retrieve_ms = 0
-    ann_ms = 0
-    rerank_ms = 0
-    ask_ms = 0
-
-# Task G: Deterministic timeouts (environment-configurable for ops)
-EMB_CONNECT_T = float(os.environ.get("EMB_CONNECT_TIMEOUT", "3"))
-EMB_READ_T = float(os.environ.get("EMB_READ_TIMEOUT", "60"))
-CHAT_CONNECT_T = float(os.environ.get("CHAT_CONNECT_TIMEOUT", "3"))
-CHAT_READ_T = float(os.environ.get("CHAT_READ_TIMEOUT", "120"))
-RERANK_READ_T = float(os.environ.get("RERANK_READ_TIMEOUT", "180"))
-
-# Exact refusal string (ASCII quotes only)
-REFUSAL_STR = "I don't know based on the MD."
-
-# Query logging configuration
-QUERY_LOG_FILE = os.environ.get("RAG_LOG_FILE", "rag_queries.jsonl")
-QUERY_LOG_DISABLED = os.environ.get("RAG_NO_LOG", "").lower() in {"1", "true", "yes", "on"}
-LOG_QUERY_INCLUDE_ANSWER = os.environ.get("RAG_LOG_INCLUDE_ANSWER", "1").lower() in {"1", "true", "yes", "on"}
-LOG_QUERY_ANSWER_PLACEHOLDER = os.environ.get("RAG_LOG_ANSWER_PLACEHOLDER", "[REDACTED]")
-LOG_QUERY_INCLUDE_CHUNKS = os.environ.get("RAG_LOG_INCLUDE_CHUNKS", "0").lower() in {"1", "true", "yes", "on"}  # Redact chunk text by default for security/privacy
-
-# Citation validation configuration
-STRICT_CITATIONS = os.environ.get("RAG_STRICT_CITATIONS", "0").lower() in {"1", "true", "yes", "on"}  # Refuse answers without citations (improves trust in regulated environments)
-
-FILES = {
-    "chunks": "chunks.jsonl",
-    "emb": "vecs_n.npy",  # Pre-normalized embeddings (float32)
-    "emb_f16": "vecs_f16.memmap",  # float16 memory-mapped (optional)
-    "emb_cache": "emb_cache.jsonl",  # Per-chunk embedding cache
-    "meta": "meta.jsonl",
-    "bm25": "bm25.json",
-    "faiss_index": "faiss.index",  # FAISS IVFFlat index (v4.1)
-    "hnsw": "hnsw_cosine.bin",  # Optional HNSW index (if USE_HNSWLIB=1)
-    "index_meta": "index.meta.json",  # Artifact versioning
-}
-
+# CLI-specific file paths (not in package config)
 BUILD_LOCK = ".build.lock"
 BUILD_LOCK_TTL_SEC = int(os.environ.get("BUILD_LOCK_TTL_SEC", "900"))  # Task D: 15 minutes default
 
-QUERY_EXPANSIONS_ENV_VAR = "CLOCKIFY_QUERY_EXPANSIONS"
-_DEFAULT_QUERY_EXPANSION_PATH = pathlib.Path(__file__).resolve().parent / "config" / "query_expansions.json"
-_query_expansion_cache = None
-_query_expansion_override = None
-
-def set_query_expansion_path(path):
-    """Override the query expansion configuration file path."""
-    global _query_expansion_override
-    if path is None:
-        _query_expansion_override = None
-    else:
-        _query_expansion_override = pathlib.Path(path)
-    reset_query_expansion_cache()
-
-def reset_query_expansion_cache():
-    """Clear cached query expansion data (useful for tests)."""
-    global _query_expansion_cache
-    _query_expansion_cache = None
-
-def _resolve_query_expansion_path():
-    if _query_expansion_override is not None:
-        return _query_expansion_override
-    env_path = os.environ.get(QUERY_EXPANSIONS_ENV_VAR)
-    if env_path:
-        return pathlib.Path(env_path)
-    return _DEFAULT_QUERY_EXPANSION_PATH
-
-def _read_query_expansion_file(path):
-    # Priority #11: Add max file size guard for security (prevent DoS via large config files)
-    MAX_EXPANSION_FILE_SIZE = int(os.environ.get("MAX_QUERY_EXPANSION_FILE_SIZE", str(10 * 1024 * 1024)))  # 10 MB default
-    try:
-        file_size = os.path.getsize(path)
-        if file_size > MAX_EXPANSION_FILE_SIZE:
-            raise ValueError(
-                f"Query expansion file too large ({file_size} bytes, max {MAX_EXPANSION_FILE_SIZE}). "
-                f"Set MAX_QUERY_EXPANSION_FILE_SIZE env var to override."
-            )
-
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except FileNotFoundError as exc:
-        raise ValueError(f"Query expansion file not found: {path}") from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON in query expansion file {path}: {exc}") from exc
-    except OSError as exc:
-        raise ValueError(f"Unable to read query expansion file {path}: {exc}") from exc
-
-    if not isinstance(data, dict):
-        raise ValueError(f"Query expansion config must be a JSON object (file: {path})")
-
-    normalized = {}
-    for term, synonyms in data.items():
-        if not isinstance(term, str):
-            raise ValueError(f"Query expansion terms must be strings (file: {path})")
-        if not isinstance(synonyms, list):
-            raise ValueError(f"Query expansion entry for '{term}' must be a list (file: {path})")
-
-        cleaned = []
-        for syn in synonyms:
-            syn_str = syn if isinstance(syn, str) else str(syn)
-            syn_str = syn_str.strip()
-            if syn_str:
-                cleaned.append(syn_str)
-
-        if cleaned:
-            normalized[term.lower()] = cleaned
-
-    return normalized
-
-def load_query_expansion_dict(force_reload=False, suppress_errors=True):
-    """Load query expansion dictionary from disk with optional caching."""
-    global _query_expansion_cache
-
-    if _query_expansion_cache is not None and not force_reload:
-        return _query_expansion_cache
-
-    path = _resolve_query_expansion_path()
-
-    try:
-        expansions = _read_query_expansion_file(path)
-    except ValueError as exc:
-        if suppress_errors:
-            logger.error("Query expansion disabled: %s", exc)
-            _query_expansion_cache = {}
-            return _query_expansion_cache
-        raise
-
-    _query_expansion_cache = expansions
-    return _query_expansion_cache
+# Note: Query expansion now handled by clockify_rag.retrieval.expand_query()
 
 # ====== CLEANUP HANDLERS ======
 def _release_lock_if_owner():

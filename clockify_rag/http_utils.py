@@ -101,28 +101,41 @@ def get_session(retries=0, use_thread_local=True) -> requests.Session:
         return REQUESTS_SESSION
 
 
-def http_post_with_retries(url: str, json_payload: dict, retries=3, backoff=0.5, timeout=None):
-    """POST with exponential backoff retry."""
+def http_post_with_retries(url: str, json_payload: dict, retries=3, backoff=0.5, timeout=None, use_thread_local=True):
+    """POST with exponential backoff retry.
+
+    Args:
+        url: Target URL
+        json_payload: JSON payload to POST
+        retries: Number of retries (passed to session adapter for unified retry logic)
+        backoff: Backoff factor (used by session adapter, parameter kept for API compatibility)
+        timeout: Request timeout tuple (connect, read)
+        use_thread_local: If True, use thread-local session (safe for parallel use)
+
+    Returns:
+        JSON response
+
+    Raises:
+        requests.exceptions.RequestException: If request fails after all retries
+
+    Note: This function now delegates retry logic to the session's retry adapter
+    for consistency with other HTTP calls. The adapter handles exponential backoff
+    automatically with backoff_factor=0.5.
+    """
     if timeout is None:
         timeout = (EMB_CONNECT_T, EMB_READ_T)
-    s = get_session()
-    last_error = None
-    for attempt in range(retries):
-        try:
-            r = s.post(url, json=json_payload, timeout=timeout, allow_redirects=False)
-            if r.status_code == 200:
-                return r.json()
-            last_error = f"HTTP {r.status_code}: {r.text[:200]}"
-        except requests.exceptions.Timeout as e:
-            last_error = f"Timeout: {e}"
-        except requests.exceptions.ConnectionError as e:
-            last_error = f"Connection error: {e}"
-        except Exception as e:
-            last_error = f"Unexpected error: {e}"
 
-        # Exponential backoff before retry
-        if attempt < retries - 1:
-            import time
-            time.sleep(backoff * (2 ** attempt))
+    # FIX: Pass retries to get_session() to use adapter-level retry logic
+    # instead of manual retry loop. This ensures connection pooling and
+    # backoff are handled consistently across all HTTP calls.
+    s = get_session(retries=retries, use_thread_local=use_thread_local)
 
-    raise requests.exceptions.RequestException(f"Failed after {retries} retries: {last_error}")
+    try:
+        r = s.post(url, json=json_payload, timeout=timeout, allow_redirects=False)
+        r.raise_for_status()  # Raise exception for HTTP errors
+        return r.json()
+    except requests.exceptions.RequestException as e:
+        # Adapter already handled retries, this is the final failure
+        raise requests.exceptions.RequestException(
+            f"HTTP POST to {url} failed after {retries} retries: {e}"
+        ) from e

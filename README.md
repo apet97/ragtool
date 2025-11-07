@@ -1,13 +1,14 @@
-# 1rag – Clockify Support CLI v5.5
+# 1rag – Clockify Support CLI v5.8
 
-**Status**: ✅ Production Ready
-**Version**: 5.5 (Architecture Cleanup - 2025-11-07)
-**Date**: 2025-11-07
+**Status**: ✅ Production Ready (Optimized for Remote Ollama/Qwen Deployments)
+**Version**: 5.8 (Configuration Consolidation & Remote Ollama Optimization - 2025-11-08)
+**Date**: 2025-11-08
 
-> **Recent**: Eliminated duplicate cache/rate limiter code by reusing package implementations. See [CHANGELOG_v5.5.md](CHANGELOG_v5.5.md) for details.
+> **Recent**: Consolidated configuration to single source, improved remote Ollama resilience, optimized context budgets for Qwen 32B, enhanced thread safety, and hardened offline deployments. See [CHANGELOG_v5.8.md](CHANGELOG_v5.8.md) for details.
 
 A local, stateless, closed-book Retrieval-Augmented Generation (RAG) chatbot for Clockify support documentation using Ollama.
 
+**New in v5.8**: 🎯 Config consolidation (single source of truth), 🌐 Remote Ollama resilience (retries: 0→2), 🚀 Qwen 32B optimization (context: 2800→6000 tokens), 🔒 Enhanced thread safety, 🔌 Offline-ready (NLTK gated downloads), 🛡️ Query logging security fixes
 **New in v5.5**: 🏗️ Removed 186 lines of duplicate code (cache/rate limiter), 📦 Reuse package implementations
 **New in v5.4**: 🚀 Optimized query logging (2-3× faster when chunks disabled), 💾 Reduced memory allocation
 **New in v5.3**: ⚡ Batched embedding futures (prevents socket exhaustion), 🛡️ Improved stability on large corpora (10,000+ chunks)
