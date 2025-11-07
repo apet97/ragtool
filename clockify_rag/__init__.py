@@ -13,7 +13,7 @@ __version__ = "5.0.0"
 from .exceptions import (
     EmbeddingError,
     LLMError,
-    IndexError,
+    IndexLoadError,
     BuildError
 )
 
@@ -71,7 +71,7 @@ __all__ = [
     # Version
     "__version__",
     # Exceptions
-    "EmbeddingError", "LLMError", "IndexError", "BuildError",
+    "EmbeddingError", "LLMError", "IndexLoadError", "BuildError",
     # Config
     "OLLAMA_URL", "GEN_MODEL", "EMB_MODEL", "CHUNK_CHARS",
     "DEFAULT_TOP_K", "DEFAULT_PACK_TOP", "REFUSAL_STR",

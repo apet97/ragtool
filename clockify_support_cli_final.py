@@ -77,7 +77,7 @@ class LLMError(Exception):
     """LLM call failed"""
     pass
 
-class IndexError(Exception):
+class IndexLoadError(Exception):
     """Index loading or validation failed"""
     pass
 
@@ -157,6 +157,7 @@ QUERY_LOG_FILE = os.environ.get("RAG_LOG_FILE", "rag_queries.jsonl")
 QUERY_LOG_DISABLED = os.environ.get("RAG_NO_LOG", "").lower() in {"1", "true", "yes", "on"}
 LOG_QUERY_INCLUDE_ANSWER = os.environ.get("RAG_LOG_INCLUDE_ANSWER", "1").lower() in {"1", "true", "yes", "on"}
 LOG_QUERY_ANSWER_PLACEHOLDER = os.environ.get("RAG_LOG_ANSWER_PLACEHOLDER", "[REDACTED]")
+LOG_QUERY_INCLUDE_CHUNKS = os.environ.get("RAG_LOG_INCLUDE_CHUNKS", "0").lower() in {"1", "true", "yes", "on"}  # Redact chunk text by default for security/privacy
 
 FILES = {
     "chunks": "chunks.jsonl",
@@ -1039,42 +1040,46 @@ def compute_sha256(filepath: str) -> str:
             sha256.update(data)
     return sha256.hexdigest()
 
-def extract_citations(text: str) -> list[int]:
+def extract_citations(text: str) -> list[str]:
     """Extract citation IDs from answer text (Rank 9: citation validation).
 
-    Supports formats: [id_123], [123], [id123, id456], etc.
+    Supports formats: [id_123], [123], [abc123-def], [id_uuid], etc.
+    Now handles both numeric IDs and UUID strings.
 
     Args:
         text: Answer text containing citations
 
     Returns:
-        List of chunk IDs referenced in text
+        List of chunk IDs (strings) referenced in text
     """
     import re
     citations = []
-    # Match patterns like [id_123], [123], [id_123, id_456]
-    pattern = r'\[(?:id_?)?(\d+)(?:\s*,\s*(?:id_?)?(\d+))*\]'
+
+    # Match patterns like [id_123], [123], [uuid-format], [id_abc-123-def], etc.
+    # Pattern matches bracketed content with optional 'id_' or 'id' prefix
+    pattern = r'\[(?:id_?)?([a-zA-Z0-9-]+)(?:\s*,\s*(?:id_?)?([a-zA-Z0-9-]+))*\]'
     matches = re.finditer(pattern, text, re.IGNORECASE)
 
     for match in matches:
-        # Extract all numbers from the match
-        nums = re.findall(r'\d+', match.group(0))
-        citations.extend([int(n) for n in nums])
+        # Extract all alphanumeric+hyphen IDs from the match
+        ids = re.findall(r'[a-zA-Z0-9-]+', match.group(0).replace('id_', '').replace('id', ''))
+        citations.extend(ids)
 
     return list(set(citations))  # Remove duplicates
 
-def validate_citations(answer: str, valid_chunk_ids: list[int]) -> tuple[bool, list[int], list[int]]:
+def validate_citations(answer: str, valid_chunk_ids: list[str]) -> tuple[bool, list[str], list[str]]:
     """Validate that answer citations match packed chunks (Rank 9).
 
     Args:
         answer: LLM-generated answer with citations
-        valid_chunk_ids: List of chunk IDs actually included in context
+        valid_chunk_ids: List of chunk IDs (strings) actually included in context
 
     Returns:
         Tuple of (is_valid, valid_citations, invalid_citations)
     """
     extracted = extract_citations(answer)
-    valid_set = set(valid_chunk_ids)
+    # Normalize to strings for comparison
+    valid_set = set(str(cid) for cid in valid_chunk_ids)
 
     valid_citations = [cid for cid in extracted if cid in valid_set]
     invalid_citations = [cid for cid in extracted if cid not in valid_set]

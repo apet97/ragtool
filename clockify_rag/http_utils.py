@@ -2,6 +2,7 @@
 
 import logging
 import os
+import threading
 
 import requests
 
@@ -9,7 +10,10 @@ from .config import EMB_CONNECT_T, EMB_READ_T
 
 logger = logging.getLogger(__name__)
 
-# Global requests session for keep-alive and retry logic
+# Thread-local storage for requests sessions (fix for parallel embedding)
+_thread_local = threading.local()
+
+# Global requests session for keep-alive and retry logic (legacy, for non-threaded callers)
 REQUESTS_SESSION = None
 REQUESTS_SESSION_RETRIES = 0
 
@@ -56,21 +60,45 @@ def _mount_retries(sess: requests.Session, retries: int):
     sess.mount("https://", adapter)
 
 
-def get_session(retries=0) -> requests.Session:
-    """Get or create global requests session with optional retry logic."""
-    global REQUESTS_SESSION, REQUESTS_SESSION_RETRIES
-    if REQUESTS_SESSION is None:
-        REQUESTS_SESSION = requests.Session()
-        # Set trust_env based on ALLOW_PROXIES env var
-        REQUESTS_SESSION.trust_env = (os.getenv("ALLOW_PROXIES") == "1")
-        if retries > 0:
-            _mount_retries(REQUESTS_SESSION, retries)
-        REQUESTS_SESSION_RETRIES = retries
-    elif retries > REQUESTS_SESSION_RETRIES:
+def get_session(retries=0, use_thread_local=True) -> requests.Session:
+    """Get or create requests session with optional retry logic.
+
+    Args:
+        retries: Number of retries for failed requests
+        use_thread_local: If True, create thread-local session (safe for parallel use).
+                         If False, use global session (legacy behavior).
+
+    Returns:
+        requests.Session instance (thread-local or global)
+    """
+    if use_thread_local:
+        # Thread-local session for safe parallel usage
+        if not hasattr(_thread_local, 'session'):
+            _thread_local.session = requests.Session()
+            _thread_local.session.trust_env = (os.getenv("ALLOW_PROXIES") == "1")
+            _thread_local.retries = 0
+
         # Upgrade retries if higher count requested
-        _mount_retries(REQUESTS_SESSION, retries)
-        REQUESTS_SESSION_RETRIES = retries
-    return REQUESTS_SESSION
+        if retries > _thread_local.retries:
+            _mount_retries(_thread_local.session, retries)
+            _thread_local.retries = retries
+
+        return _thread_local.session
+    else:
+        # Legacy global session behavior
+        global REQUESTS_SESSION, REQUESTS_SESSION_RETRIES
+        if REQUESTS_SESSION is None:
+            REQUESTS_SESSION = requests.Session()
+            # Set trust_env based on ALLOW_PROXIES env var
+            REQUESTS_SESSION.trust_env = (os.getenv("ALLOW_PROXIES") == "1")
+            if retries > 0:
+                _mount_retries(REQUESTS_SESSION, retries)
+            REQUESTS_SESSION_RETRIES = retries
+        elif retries > REQUESTS_SESSION_RETRIES:
+            # Upgrade retries if higher count requested
+            _mount_retries(REQUESTS_SESSION, retries)
+            REQUESTS_SESSION_RETRIES = retries
+        return REQUESTS_SESSION
 
 
 def http_post_with_retries(url: str, json_payload: dict, retries=3, backoff=0.5, timeout=None):

@@ -223,6 +223,7 @@ def log_query(query: str, answer: str, retrieved_chunks: list, latency_ms: float
     from .config import (
         LOG_QUERY_ANSWER_PLACEHOLDER,
         LOG_QUERY_INCLUDE_ANSWER,
+        LOG_QUERY_INCLUDE_CHUNKS,
         QUERY_LOG_FILE,
     )
 
@@ -235,6 +236,10 @@ def log_query(query: str, answer: str, retrieved_chunks: list, latency_ms: float
             normalized["dense"] = float(normalized.get("dense", normalized.get("score", 0.0)))
             normalized["bm25"] = float(normalized.get("bm25", 0.0))
             normalized["hybrid"] = float(normalized.get("hybrid", normalized["dense"]))
+            # Redact chunk text for security/privacy unless explicitly enabled
+            if not LOG_QUERY_INCLUDE_CHUNKS:
+                normalized.pop("chunk", None)  # Remove full chunk text
+                normalized.pop("text", None)   # Remove text field if present
         else:
             normalized = {
                 "id": chunk,

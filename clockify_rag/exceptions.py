@@ -11,7 +11,7 @@ class LLMError(Exception):
     pass
 
 
-class IndexError(Exception):
+class IndexLoadError(Exception):
     """Index loading or validation failed."""
     pass
 
