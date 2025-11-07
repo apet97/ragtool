@@ -1,13 +1,15 @@
-# 1rag – Clockify Support CLI v5.3
+# 1rag – Clockify Support CLI v5.5
 
 **Status**: ✅ Production Ready
-**Version**: 5.3 (Performance & Stability - 2025-11-07)
+**Version**: 5.5 (Architecture Cleanup - 2025-11-07)
 **Date**: 2025-11-07
 
-> **Recent**: Implemented embedding future batching for improved stability under load. See [CHANGELOG_v5.3.md](CHANGELOG_v5.3.md) for details.
+> **Recent**: Eliminated duplicate cache/rate limiter code by reusing package implementations. See [CHANGELOG_v5.5.md](CHANGELOG_v5.5.md) for details.
 
 A local, stateless, closed-book Retrieval-Augmented Generation (RAG) chatbot for Clockify support documentation using Ollama.
 
+**New in v5.5**: 🏗️ Removed 186 lines of duplicate code (cache/rate limiter), 📦 Reuse package implementations
+**New in v5.4**: 🚀 Optimized query logging (2-3× faster when chunks disabled), 💾 Reduced memory allocation
 **New in v5.3**: ⚡ Batched embedding futures (prevents socket exhaustion), 🛡️ Improved stability on large corpora (10,000+ chunks)
 **New in v5.2**: 🎯 Deterministic FAISS, 🔐 Enhanced security, 📊 Cache regression tests, 📝 Comprehensive env docs, 🗂️ Clean repository (79% fewer docs)
 **New in v5.1**: 🔒 Thread-safe, 🚀 50-200ms faster first query, 🛠️ Better error messages, 🔍 Improved observability
