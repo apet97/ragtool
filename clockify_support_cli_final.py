@@ -477,7 +477,9 @@ def build_faiss_index(vecs: np.ndarray, nlist: int = 256, metric: str = "ip") ->
         index.train(train_vecs)
         index.add(vecs_f32)
 
-    index.nprobe = ANN_NPROBE
+    # Only set nprobe for IVF indexes (not flat indexes)
+    if hasattr(index, 'nprobe'):
+        index.nprobe = ANN_NPROBE
 
     index_type = "IVFFlat" if hasattr(index, 'nlist') else "FlatIP"
     logger.debug(f"Built FAISS index: type={index_type}, nlist={nlist if not is_macos_arm64 else 32}, nprobe={ANN_NPROBE}, vectors={len(vecs)}, platform={'arm64' if is_macos_arm64 else 'standard'}")
@@ -510,7 +512,9 @@ def load_faiss_index(path: str | None = None) -> object | None:
         faiss = _try_load_faiss()
         if faiss:
             _FAISS_INDEX = faiss.read_index(path)
-            _FAISS_INDEX.nprobe = ANN_NPROBE
+            # Only set nprobe for IVF indexes (not flat indexes)
+            if hasattr(_FAISS_INDEX, 'nprobe'):
+                _FAISS_INDEX.nprobe = ANN_NPROBE
             logger.debug(f"Loaded FAISS index from {path}")
             return _FAISS_INDEX
         return None
@@ -1633,7 +1637,9 @@ def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0) 
     if USE_ANN == "faiss" and _FAISS_INDEX is None:
         _FAISS_INDEX = load_faiss_index(FILES["faiss_index"])
         if _FAISS_INDEX:
-            _FAISS_INDEX.nprobe = ANN_NPROBE
+            # Only set nprobe for IVF indexes (not flat indexes)
+            if hasattr(_FAISS_INDEX, 'nprobe'):
+                _FAISS_INDEX.nprobe = ANN_NPROBE
             logger.info("info: ann=faiss status=loaded nprobe=%d", ANN_NPROBE)
         else:
             logger.info("info: ann=fallback reason=missing-index")

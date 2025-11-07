@@ -102,7 +102,9 @@ def build_faiss_index(vecs: np.ndarray, nlist: int = 256, metric: str = "ip") ->
         index.train(train_vecs)
         index.add(vecs_f32)
 
-    index.nprobe = config.ANN_NPROBE
+    # Only set nprobe for IVF indexes (not flat indexes)
+    if hasattr(index, 'nprobe'):
+        index.nprobe = config.ANN_NPROBE
 
     index_type = "IVFFlat" if hasattr(index, 'nlist') else "FlatIP"
     logger.debug(f"Built FAISS index: type={index_type}, vectors={len(vecs)}")
@@ -137,7 +139,9 @@ def load_faiss_index(path: str = None):
         faiss = _try_load_faiss()
         if faiss:
             _FAISS_INDEX = faiss.read_index(path)
-            _FAISS_INDEX.nprobe = config.ANN_NPROBE
+            # Only set nprobe for IVF indexes (not flat indexes)
+            if hasattr(_FAISS_INDEX, 'nprobe'):
+                _FAISS_INDEX.nprobe = config.ANN_NPROBE
             logger.debug(f"Loaded FAISS index from {path}")
             return _FAISS_INDEX
         return None

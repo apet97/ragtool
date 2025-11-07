@@ -358,7 +358,9 @@ def retrieve(question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0,
             if _FAISS_INDEX is None and faiss_index_path:
                 _FAISS_INDEX = load_faiss_index(faiss_index_path)
                 if _FAISS_INDEX:
-                    _FAISS_INDEX.nprobe = config.ANN_NPROBE
+                    # Only set nprobe for IVF indexes (not flat indexes)
+                    if hasattr(_FAISS_INDEX, 'nprobe'):
+                        _FAISS_INDEX.nprobe = config.ANN_NPROBE
                     logger.info("info: ann=faiss status=loaded nprobe=%d", config.ANN_NPROBE)
                 else:
                     logger.info("info: ann=fallback reason=missing-index")
