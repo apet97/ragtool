@@ -37,12 +37,11 @@ def test_retrieve_local_backend(monkeypatch, sample_chunks, sample_embeddings, s
 
     # Force local backend across modules
     monkeypatch.setattr(config, "EMB_BACKEND", "local", raising=False)
-    monkeypatch.setattr(embedding, "EMB_BACKEND", "local", raising=False)
-    monkeypatch.setattr(retrieval, "EMB_BACKEND", "local", raising=False)
     monkeypatch.setattr(retrieval, "_FAISS_INDEX", None, raising=False)
-    monkeypatch.setattr(retrieval, "USE_ANN", "none", raising=False)
+    monkeypatch.setattr(config, "USE_ANN", "none", raising=False)
 
-    fake_vec = np.ones((1, embedding.EMB_DIM), dtype=np.float32)
+    # Use config.EMB_DIM_LOCAL since we're using local backend
+    fake_vec = np.ones((1, config.EMB_DIM_LOCAL), dtype=np.float32)
     fake_vec = fake_vec / np.linalg.norm(fake_vec, axis=1, keepdims=True)
 
     calls = {"count": 0}

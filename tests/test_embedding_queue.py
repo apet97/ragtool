@@ -2,11 +2,13 @@ import numpy as np
 
 
 def test_embed_texts_does_not_drop_pending(monkeypatch):
+    import clockify_rag.config as config
     import clockify_rag.embedding as embedding
 
-    monkeypatch.setattr(embedding, "EMB_MAX_WORKERS", 2)
-    monkeypatch.setattr(embedding, "EMB_BATCH_SIZE", 2)
-    monkeypatch.setattr(embedding, "EMB_BACKEND", "ollama")
+    # Patch config values (not embedding module directly)
+    monkeypatch.setattr(config, "EMB_MAX_WORKERS", 2)
+    monkeypatch.setattr(config, "EMB_BATCH_SIZE", 2)
+    monkeypatch.setattr(config, "EMB_BACKEND", "ollama")
 
     def fake_embed_single_text(index, text, retries, total):
         return index, [float(index)]
