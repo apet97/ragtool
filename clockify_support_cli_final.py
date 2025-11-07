@@ -587,7 +587,7 @@ def log_kpi(topk: int, packed: int, used_tokens: int, rerank_applied: bool, rera
     logger.info(f"kpi {kpi_line}")
 
 # ====== JSON OUTPUT (v4.1 - Section 9) ======
-def answer_to_json(answer: str, citations: list, used_tokens: int | None, topk: int, packed: int) -> dict:
+def answer_to_json(answer: str, citations: list, used_tokens: int | None, topk: int, packed: int, confidence: int | None = None) -> dict:
     """Convert answer and metadata to JSON structure.
 
     Args:
@@ -596,9 +596,10 @@ def answer_to_json(answer: str, citations: list, used_tokens: int | None, topk: 
         used_tokens: Actual token budget consumed when packing context.
         topk: Retrieval depth requested.
         packed: Maximum number of snippets packed.
+        confidence: LLM confidence score (0-100), if available.
     """
     budget_tokens = 0 if used_tokens is None else int(used_tokens)
-    return {
+    result = {
         "answer": answer,
         "citations": citations,
         "debug": {
@@ -619,6 +620,12 @@ def answer_to_json(answer: str, citations: list, used_tokens: int | None, topk: 
             }
         }
     }
+
+    # Include confidence if available
+    if confidence is not None:
+        result["confidence"] = confidence
+
+    return result
 
 # ====== SELF-TEST INTEGRATION CHECKS (v4.1 - Section 8) ======
 # Note: Detailed unit tests are in test_* functions below.
@@ -1007,25 +1014,45 @@ def approx_tokens(chars: int) -> int:
     """
     return max(1, chars // 4)
 
-def count_tokens(text: str, model: str = "gpt-3.5-turbo") -> int:
-    """Count actual tokens using tiktoken (Rank 5: accurate token counting).
+def count_tokens(text: str, model: str = None) -> int:
+    """Count actual tokens using tiktoken for supported models (Rank 5: accurate token counting).
 
-    Falls back to character-based heuristic if tiktoken is unavailable.
+    Falls back to model-specific heuristics for Qwen and other models.
 
     Args:
         text: Text to count tokens for
-        model: Model name for tokenizer (default: gpt-3.5-turbo)
+        model: Model name for tokenizer (defaults to GEN_MODEL)
 
     Returns:
         Accurate token count
     """
-    try:
-        import tiktoken
-        encoding = tiktoken.encoding_for_model(model)
-        return len(encoding.encode(text))
-    except (ImportError, KeyError):
-        # Fallback to heuristic if tiktoken unavailable or model not found
-        return approx_tokens(len(text))
+    if model is None:
+        model = GEN_MODEL
+
+    # Try tiktoken for GPT models
+    if "gpt" in model.lower():
+        try:
+            import tiktoken
+            encoding = tiktoken.encoding_for_model(model)
+            return len(encoding.encode(text))
+        except (ImportError, KeyError):
+            pass
+
+    # For Qwen and other models, use improved heuristic
+    # Qwen tokenizer tends to be more efficient than GPT for English (~3.5 chars/token)
+    # but less efficient for CJK content (~1.5 chars/token)
+    if "qwen" in model.lower():
+        # Count CJK characters (Chinese, Japanese, Korean)
+        import re
+        cjk_pattern = r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]'
+        cjk_chars = len(re.findall(cjk_pattern, text))
+        non_cjk_chars = len(text) - cjk_chars
+
+        # CJK: ~1.5 chars/token, non-CJK: ~3.5 chars/token
+        return int(cjk_chars / 1.5 + non_cjk_chars / 3.5)
+
+    # Default fallback
+    return approx_tokens(len(text))
 
 def compute_sha256(filepath: str) -> str:
     """Compute SHA256 hash of file."""
@@ -1041,8 +1068,10 @@ def compute_sha256(filepath: str) -> str:
 def extract_citations(text: str) -> list[str]:
     """Extract citation IDs from answer text (Rank 9: citation validation).
 
-    Supports formats: [id_123], [123], [abc123-def], [id_uuid], etc.
-    Now handles both numeric IDs and UUID strings.
+    Supports formats:
+    - Single: [id_123], [123], [abc123-def]
+    - Comma-separated: [id_a, id_b], [123, 456]
+    - Mixed: [id_123, 456, abc-def]
 
     Args:
         text: Answer text containing citations
@@ -1051,17 +1080,18 @@ def extract_citations(text: str) -> list[str]:
         List of chunk IDs (strings) referenced in text
     """
     import re
+    # Match brackets containing citation IDs (single or comma-separated)
+    # First, find all bracketed content: [...]
+    bracket_pattern = r'\[([^\]]+)\]'
+    bracket_matches = re.findall(bracket_pattern, text)
+
     citations = []
-
-    # Match patterns like [id_123], [123], [uuid-format], [id_abc-123-def], etc.
-    # Pattern matches bracketed content with optional 'id_' or 'id' prefix
-    pattern = r'\[(?:id_?)?([a-zA-Z0-9-]+)(?:\s*,\s*(?:id_?)?([a-zA-Z0-9-]+))*\]'
-    matches = re.finditer(pattern, text, re.IGNORECASE)
-
-    for match in matches:
-        # Extract all alphanumeric+hyphen IDs from the match
-        ids = re.findall(r'[a-zA-Z0-9-]+', match.group(0).replace('id_', '').replace('id', ''))
-        citations.extend(ids)
+    for match in bracket_matches:
+        # Split by comma and extract individual IDs
+        # Match alphanumeric IDs with underscores and hyphens
+        id_pattern = r'([a-zA-Z0-9_-]+)'
+        ids = re.findall(id_pattern, match)
+        citations.extend([id.strip() for id in ids if id.strip()])
 
     return list(set(citations))  # Remove duplicates
 
@@ -1884,10 +1914,15 @@ def pack_snippets(chunks, order, pack_top=6, budget_tokens=CTX_TOKEN_BUDGET, num
     """Pack snippets respecting strict token budget and hard snippet cap.
 
     Guarantees:
-    - Never exceeds CTX_TOKEN_BUDGET (headers + separators included)
+    - Never exceeds min(CTX_TOKEN_BUDGET, num_ctx * 0.6)
+    - Respects model's actual context window via num_ctx
     - First item always included (truncate body if needed; mark [TRUNCATED])
     - Returns (block, ids, used_tokens)
     """
+    # Honor num_ctx: reserve 40% for system prompt + answer generation
+    # Use the minimum of the configured budget and 60% of model's context window
+    effective_budget = min(budget_tokens, int(num_ctx * 0.6))
+
     out = []
     ids = []
     used = 0
@@ -1912,9 +1947,9 @@ def pack_snippets(chunks, order, pack_top=6, budget_tokens=CTX_TOKEN_BUDGET, num
         if idx_pos == 0 and not ids:
             # Always include first; truncate if needed to fit budget
             item_tokens = hdr_tokens + body_tokens
-            if item_tokens > budget_tokens:
+            if item_tokens > effective_budget:
                 # amount available for body after header
-                allow_body = max(1, budget_tokens - hdr_tokens)
+                allow_body = max(1, effective_budget - hdr_tokens)
                 body = truncate_to_token_budget(body, allow_body)
                 body_tokens = count_tokens(body)
                 item_tokens = hdr_tokens + body_tokens
@@ -1926,7 +1961,7 @@ def pack_snippets(chunks, order, pack_top=6, budget_tokens=CTX_TOKEN_BUDGET, num
 
         # For subsequent items, check sep + header + body within budget
         item_tokens = hdr_tokens + body_tokens
-        if used + sep_cost + item_tokens <= budget_tokens:
+        if used + sep_cost + item_tokens <= effective_budget:
             if need_sep:
                 out.append(sep_text)
             out.append(hdr + "\n" + body)
@@ -2152,6 +2187,12 @@ def build(md_path: str, retries=0):
         # Task E: use atomic_write_json for index.meta.json
         atomic_write_json(FILES["index_meta"], index_meta)
         logger.info(f"  Saved index metadata")
+
+        # Invalidate global FAISS cache to force reload of new index
+        global _FAISS_INDEX
+        with _FAISS_INDEX_LOCK:
+            _FAISS_INDEX = None
+            logger.debug("  Reset FAISS cache")
 
         logger.info("\n[4/4] Done.")
         logger.info("=" * 70)
@@ -3309,7 +3350,8 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
                 meta.get("selected", []),
                 meta.get("used_tokens"),
                 top_k,
-                pack_top
+                pack_top,
+                meta.get("confidence")
             )
             print(json.dumps(output, ensure_ascii=False, indent=2))
         else:
@@ -3420,7 +3462,6 @@ def main():
     c.add_argument("--json", action="store_true", help="Output answer as JSON with metrics (v4.1)")
 
     a = subparsers.add_parser("ask", help="Answer a single question and exit")
-    a.add_argument("question", help="Question text to send to the assistant")
     a.add_argument("question", help="Question to answer")
     a.add_argument("--debug", action="store_true", help="Print retrieval diagnostics")
     a.add_argument("--rerank", action="store_true", help="Enable LLM-based reranking")
@@ -3550,7 +3591,8 @@ def main():
                 meta.get("selected", []),
                 used_tokens,
                 args.topk,
-                args.pack
+                args.pack,
+                meta.get("confidence")
             )
             print(json.dumps(output, ensure_ascii=False, indent=2))
         else:
@@ -3655,7 +3697,8 @@ def main():
                 meta.get("selected", []),
                 used_tokens,
                 args.topk,
-                args.pack
+                args.pack,
+                meta.get("confidence")
             )
             print(json.dumps(output, ensure_ascii=False, indent=2))
         else:

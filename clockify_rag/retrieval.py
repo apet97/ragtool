@@ -192,17 +192,47 @@ def approx_tokens(chars: int) -> int:
     return max(1, chars // 4)
 
 
-def count_tokens(text: str, model: str = "gpt-3.5-turbo") -> int:
-    """Count actual tokens using tiktoken.
+def count_tokens(text: str, model: str = None) -> int:
+    """Count actual tokens using tiktoken for supported models.
 
-    Falls back to character-based heuristic if tiktoken is unavailable.
+    Falls back to model-specific heuristics for Qwen and other models.
+
+    Args:
+        text: Text to count tokens for
+        model: Model name (defaults to config.GEN_MODEL)
+
+    Returns:
+        Estimated token count
     """
-    try:
-        import tiktoken
-        encoding = tiktoken.encoding_for_model(model)
-        return len(encoding.encode(text))
-    except (ImportError, KeyError):
-        return approx_tokens(len(text))
+    from . import config
+
+    if model is None:
+        model = config.GEN_MODEL
+
+    # Try tiktoken for GPT models
+    if "gpt" in model.lower():
+        try:
+            import tiktoken
+            encoding = tiktoken.encoding_for_model(model)
+            return len(encoding.encode(text))
+        except (ImportError, KeyError):
+            pass
+
+    # For Qwen and other models, use improved heuristic
+    # Qwen tokenizer tends to be more efficient than GPT for English (~3.5 chars/token)
+    # but less efficient for CJK content (~1.5 chars/token)
+    if "qwen" in model.lower():
+        # Count CJK characters (Chinese, Japanese, Korean)
+        import re
+        cjk_pattern = r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]'
+        cjk_chars = len(re.findall(cjk_pattern, text))
+        non_cjk_chars = len(text) - cjk_chars
+
+        # CJK: ~1.5 chars/token, non-CJK: ~3.5 chars/token
+        return int(cjk_chars / 1.5 + non_cjk_chars / 3.5)
+
+    # Default fallback
+    return approx_tokens(len(text))
 
 
 def truncate_to_token_budget(text: str, budget: int) -> str:
@@ -622,7 +652,8 @@ def pack_snippets(
     """Pack snippets respecting strict token budget and hard snippet cap.
 
     Guarantees:
-    - Never exceeds config.CTX_TOKEN_BUDGET (headers + separators included)
+    - Never exceeds min(config.CTX_TOKEN_BUDGET, num_ctx * 0.6)
+    - Respects model's actual context window via num_ctx
     - First item always included (truncate body if needed; mark [TRUNCATED])
     - Returns (block, ids, used_tokens)
     """
@@ -632,6 +663,10 @@ def pack_snippets(
         budget_tokens = config.CTX_TOKEN_BUDGET
     if num_ctx is None:
         num_ctx = config.DEFAULT_NUM_CTX
+
+    # Honor num_ctx: reserve 40% for system prompt + answer generation
+    # Use the minimum of the configured budget and 60% of model's context window
+    effective_budget = min(budget_tokens, int(num_ctx * 0.6))
 
     out = []
     ids = []
@@ -657,8 +692,8 @@ def pack_snippets(
         if idx_pos == 0 and not ids:
             # Always include first; truncate if needed to fit budget
             item_tokens = hdr_tokens + body_tokens
-            if item_tokens > budget_tokens:
-                allow_body = max(1, budget_tokens - hdr_tokens)
+            if item_tokens > effective_budget:
+                allow_body = max(1, effective_budget - hdr_tokens)
                 body = truncate_to_token_budget(body, allow_body)
                 body_tokens = count_tokens(body)
                 item_tokens = hdr_tokens + body_tokens
@@ -670,7 +705,7 @@ def pack_snippets(
 
         # For subsequent items, check sep + header + body within budget
         item_tokens = hdr_tokens + body_tokens
-        if used + sep_cost + item_tokens <= budget_tokens:
+        if used + sep_cost + item_tokens <= effective_budget:
             if need_sep:
                 out.append(sep_text)
             out.append(hdr + "\n" + body)

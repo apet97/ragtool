@@ -1,14 +1,17 @@
 # Clockify RAG CLI Tool
 
-A local, offline Retrieval-Augmented Generation (RAG) CLI tool that uses Clockify's Markdown documentation as a knowledge base with a local Ollama LLM instance for Q&A.
+A Retrieval-Augmented Generation (RAG) CLI tool that uses Clockify's Markdown documentation as a knowledge base with Ollama LLM for Q&A.
 
 ## Overview
 
-This tool (`clockify_rag.py`) implements a three-stage pipeline:
+This tool (`clockify_support_cli_final.py`) implements a production-ready RAG pipeline:
 
 1. **Chunking**: Split the markdown documentation into manageable text chunks based on document structure
-2. **Embedding**: Generate vector embeddings for all chunks using a local embedding model (nomic-embed-text)
-3. **Retrieval & QA**: Answer user questions by retrieving relevant chunks and querying a local LLM
+2. **Embedding**: Generate vector embeddings for all chunks using embedding models (local or via Ollama)
+3. **Hybrid Retrieval**: Combine BM25 keyword search with dense semantic search
+4. **Answer Generation**: Use LLM to generate answers from retrieved context with citation validation
+
+**Note**: This README documents the current production CLI. For the legacy v1.0 simple implementation, see `clockify_rag.py` (deprecated).
 
 ## Architecture
 
@@ -21,95 +24,166 @@ This tool (`clockify_rag.py`) implements a three-stage pipeline:
 
 ### Embedding & Storage
 
-- Uses Ollama's `nomic-embed-text` model for semantic vector generation
-- Stores embeddings in `vecs.npy` (NumPy array format)
-- Stores metadata (chunk IDs and text) in `meta.jsonl` for retrieval
+- Supports two embedding backends:
+  - **Local**: SentenceTransformer models (offline, no external dependency)
+  - **Ollama**: `nomic-embed-text` via Ollama API (configurable endpoint)
+- Stores normalized embeddings in `vecs_n.npy` (NumPy array format)
+- Stores metadata (chunk IDs, titles, sections) in `meta.jsonl`
+- Optional FAISS ANN index for fast retrieval on large knowledge bases
+- BM25 index for keyword-based retrieval (`bm25.json`)
 
-### Retrieval & Answering
+### Hybrid Retrieval & Answering
 
-- Embeds user questions with the same embedding model
-- Uses cosine similarity to rank chunks by relevance
-- Retrieves top 6 most relevant chunks
-- Applies a relevance threshold (similarity ≥ 0.3) to ensure answer quality
-- If fewer than 2 chunks meet the threshold, responds with "I don't know based on the MD."
-- Constructs a system prompt instructing the LLM to be a "closed-book assistant" using only retrieved snippets
-- Uses local `qwen2.5:32b` model via Ollama's chat API for final answer generation
+- **Hybrid retrieval**: Combines BM25 (keyword) + dense semantic search with configurable blending
+- **Query expansion**: Automatic synonym expansion for better recall
+- **MMR reranking**: Maximal Marginal Relevance to diversify results and reduce redundancy
+- **Optional LLM reranking**: Use LLM to rerank candidates for improved relevance
+- Retrieves top-K candidates (default: 12), packs top-N snippets (default: 6)
+- Applies similarity threshold (≥ 0.30) to ensure answer quality
+- **Citation validation**: Validates that all citations reference actual context chunks
+- **Confidence scoring**: LLM provides confidence score (1-5) for each answer
+- Uses `qwen2.5:32b` model via Ollama's chat API for final answer generation
+- Refuses to answer with "I don't know based on the MD." when context is insufficient
 
 ## Prerequisites
 
 ### System Requirements
 
 - Python 3.7+
-- Local Ollama instance running on `http://10.127.0.192:11434` (adjust URL in script if different)
-- Required Python packages: `requests`, `numpy`
+- Ollama instance (local or remote) - default: `http://127.0.0.1:11434`
+- Required Python packages: `requests`, `numpy`, `sentence-transformers` (optional, for local embeddings)
 
 ### Ollama Setup
 
-Ensure the following models are available locally:
+**Option 1: Local Ollama**
 
+1. Install Ollama from https://ollama.ai
+2. Pull required models:
+   ```bash
+   ollama pull nomic-embed-text    # For embedding generation (if using Ollama backend)
+   ollama pull qwen2.5:32b          # For LLM-based answering
+   ```
+3. Run Ollama server:
+   ```bash
+   ollama serve
+   ```
+
+**Option 2: Remote Ollama**
+
+Set the `OLLAMA_URL` environment variable to point to your remote instance:
 ```bash
-ollama pull nomic-embed-text    # For embedding generation
-ollama pull qwen2.5:32b          # For LLM-based answering
+export OLLAMA_URL="http://your-ollama-host:11434"
 ```
 
-Run Ollama server:
-
-```bash
-ollama serve
-```
+Ensure the remote Ollama instance has the required models installed.
 
 ### Python Dependencies
 
+Install required packages:
+
 ```bash
-pip install requests numpy
+pip install -r requirements.txt
+# Or manually:
+pip install requests numpy sentence-transformers
 ```
+
+**Note**: `sentence-transformers` is only needed if using local embedding backend (`--emb-backend local`).
 
 ## Usage
 
-### 1. Chunk the Documentation
+### 1. Build the Knowledge Base
 
-Split the `knowledge_full.md` file into chunks:
-
-```bash
-python3 clockify_rag.py chunk
-```
-
-**Output**: Creates `chunks.jsonl` with one JSON object per line, each containing:
-- `id`: Unique chunk identifier
-- `text`: Chunk content
-
-### 2. Generate Embeddings
-
-Embed all chunks using the local embedding model:
+Build the complete index (chunks, embeddings, BM25, FAISS) in one command:
 
 ```bash
-python3 clockify_rag.py embed
+python3 clockify_support_cli_final.py build knowledge_full.md
 ```
 
-**Output**:
-- `vecs.npy`: NumPy array of embedding vectors
-- `meta.jsonl`: Metadata file with chunk IDs and text content
+**Output**: Creates all required index files:
+- `chunks.jsonl`: Text chunks with metadata
+- `vecs_n.npy`: Normalized embedding vectors
+- `meta.jsonl`: Chunk metadata (IDs, titles, sections, URLs)
+- `bm25.json`: BM25 keyword index
+- `index.meta.json`: Build metadata and versioning
+- `faiss_ivf.index`: FAISS ANN index (if enabled)
 
-### 3. Ask Questions
+### 2. Ask Questions (Single Query)
 
-Query the knowledge base:
+Query the knowledge base with a single question:
 
 ```bash
-python3 clockify_rag.py ask "How do I track time in Clockify?"
+python3 clockify_support_cli_final.py ask "How do I track time in Clockify?"
 ```
 
-**Output**: An answer from the LLM with citations to relevant snippets, or "I don't know based on the MD." if the information isn't found.
+**Options**:
+- `--debug`: Show retrieval diagnostics and scores
+- `--rerank`: Enable LLM-based reranking for better relevance
+- `--topk N`: Retrieve top-K candidates (default: 12)
+- `--pack N`: Pack top-N snippets into context (default: 6)
+- `--threshold T`: Minimum similarity threshold (default: 0.30)
+- `--json`: Output answer as JSON with metadata
+- `--emb-backend {local,ollama}`: Choose embedding backend
+- `--ann {faiss,none}`: Enable/disable FAISS ANN index
+
+### 3. Interactive Chat Mode
+
+Start an interactive REPL session:
+
+```bash
+python3 clockify_support_cli_final.py chat
+```
+
+Interactive commands:
+- `:exit` - Exit the session
+- `:debug` - Toggle debug mode
+- `:help` - Show available commands
 
 ## Configuration
 
-Edit the following constants in `clockify_rag.py` to customize behavior:
+### Environment Variables
+
+Configure the system via environment variables:
+
+```bash
+# Ollama endpoint (default: http://127.0.0.1:11434)
+export OLLAMA_URL="http://your-ollama-host:11434"
+
+# Model configuration
+export GEN_MODEL="qwen2.5:32b"              # LLM for answer generation
+export EMB_MODEL="nomic-embed-text"         # Embedding model (if using Ollama backend)
+
+# Embedding backend: "local" (SentenceTransformer) or "ollama"
+export EMB_BACKEND="local"
+
+# Context budget in tokens
+export CTX_BUDGET="2800"
+
+# BM25 tuning
+export BM25_K1="1.0"
+export BM25_B="0.65"
+```
+
+### Script Constants
+
+Advanced configuration in `clockify_support_cli_final.py`:
 
 ```python
-CHUNK_SIZE = 1600          # Maximum characters per chunk
-CHUNK_OVERLAP = 200        # Character overlap between sub-chunks
-OLLAMA_URL = "http://10.127.0.192:11434"  # Ollama server URL
-EMBED_MODEL = "nomic-embed-text"
-CHAT_MODEL = "qwen2.5:32b"
+# Chunking
+CHUNK_CHARS = 1600           # Maximum characters per chunk
+CHUNK_OVERLAP = 200          # Character overlap between sub-chunks
+
+# Retrieval
+DEFAULT_TOP_K = 12           # Candidates to retrieve
+DEFAULT_PACK_TOP = 6         # Snippets to pack into context
+DEFAULT_THRESHOLD = 0.30     # Minimum similarity score
+
+# Hybrid search
+ALPHA_HYBRID = 0.5           # BM25 vs dense blend (0.5 = equal weight)
+MMR_LAMBDA = 0.7             # Relevance vs diversity (0.7 = favor relevance)
+
+# LLM
+DEFAULT_NUM_CTX = 8192       # Context window size
+DEFAULT_NUM_PREDICT = 512    # Max generation tokens
 ```
 
 ## File Structure

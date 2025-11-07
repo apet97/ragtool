@@ -390,6 +390,12 @@ def build(md_path: str, retries=0):
         atomic_write_json(config.FILES["index_meta"], index_meta)
         logger.info(f"  Saved index metadata")
 
+        # Invalidate global FAISS cache to force reload of new index
+        global _FAISS_INDEX
+        with _FAISS_LOCK:
+            _FAISS_INDEX = None
+            logger.debug("  Reset FAISS cache")
+
         logger.info("\n[4/4] Done.")
         logger.info("=" * 70)
 

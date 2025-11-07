@@ -157,13 +157,26 @@ def apply_reranking(
 def extract_citations(text: str) -> List[str]:
     """Extract citation IDs from answer text.
 
-    Supports formats: [id_123], [123], [abc123-def], [id_uuid], etc.
+    Supports formats:
+    - Single: [id_123], [123], [abc123-def]
+    - Comma-separated: [id_a, id_b], [123, 456]
+    - Mixed: [id_123, 456, abc-def]
     """
     import re
-    # Match [id_xxx], [123], [abc-def], [id_uuid-...]
-    pattern = r'\[([a-zA-Z0-9_-]+)\]'
-    matches = re.findall(pattern, text)
-    return [m for m in matches if m]  # Filter empty strings
+    # Match brackets containing citation IDs (single or comma-separated)
+    # First, find all bracketed content: [...]
+    bracket_pattern = r'\[([^\]]+)\]'
+    bracket_matches = re.findall(bracket_pattern, text)
+
+    citations = []
+    for match in bracket_matches:
+        # Split by comma and extract individual IDs
+        # Match alphanumeric IDs with underscores and hyphens
+        id_pattern = r'([a-zA-Z0-9_-]+)'
+        ids = re.findall(id_pattern, match)
+        citations.extend([id.strip() for id in ids if id.strip()])
+
+    return citations
 
 
 def validate_citations(answer: str, valid_chunk_ids: List) -> Tuple[bool, List[str], List[str]]:
