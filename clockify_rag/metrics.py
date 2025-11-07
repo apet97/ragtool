@@ -244,19 +244,21 @@ class MetricsCollector:
                 lines.append(f"{name}{labels_str} {value}")
 
             # Histograms (as summaries)
-            processed = set()
+            # Track which metric names have had TYPE declaration output
+            type_declared = set()
             for key in self._histograms.keys():
                 name, labels = self._parse_key(key)
-                if name in processed:
-                    continue
-                processed.add(name)
+
+                # Output TYPE declaration once per metric name
+                if name not in type_declared:
+                    lines.append(f"# TYPE {name} summary")
+                    type_declared.add(name)
 
                 stats = self.get_histogram_stats(name, labels)
                 if not stats:
                     continue
 
                 labels_str = self._format_prometheus_labels(labels)
-                lines.append(f"# TYPE {name} summary")
                 lines.append(f"{name}_count{labels_str} {stats.count}")
                 lines.append(f"{name}_sum{labels_str} {stats.sum}")
                 lines.append(f"{name}{{quantile=\"0.5\"{self._add_labels(labels)}}} {stats.p50}")
@@ -317,7 +319,7 @@ class MetricsCollector:
                 "key_metrics": {}
             }
 
-            # Add key metrics if available
+            # Add key metrics if available (aggregate across all label variants)
             key_metrics = [
                 "queries_total",
                 "cache_hits",
@@ -328,18 +330,34 @@ class MetricsCollector:
             ]
 
             for metric in key_metrics:
-                # Check counter
-                if metric in self._counters:
-                    summary["key_metrics"][metric] = self._counters[metric]
-                # Check histogram
-                elif metric in self._histograms:
-                    stats = self.get_histogram_stats(metric)
-                    if stats:
-                        summary["key_metrics"][metric] = {
-                            "count": stats.count,
-                            "mean": stats.mean,
-                            "p95": stats.p95
-                        }
+                # Aggregate counters across all label variants
+                counter_total = 0.0
+                counter_found = False
+                for key, value in self._counters.items():
+                    name, _ = self._parse_key(key)
+                    if name == metric:
+                        counter_total += value
+                        counter_found = True
+
+                if counter_found:
+                    summary["key_metrics"][metric] = counter_total
+                    continue
+
+                # Aggregate histogram observations across all label variants
+                all_observations = []
+                for key in self._histograms.keys():
+                    name, _ = self._parse_key(key)
+                    if name == metric:
+                        all_observations.extend(list(self._histograms[key]))
+
+                if all_observations:
+                    sorted_obs = sorted(all_observations)
+                    n = len(sorted_obs)
+                    summary["key_metrics"][metric] = {
+                        "count": n,
+                        "mean": sum(all_observations) / n,
+                        "p95": sorted_obs[int(n * 0.95)]
+                    }
 
             return summary
 

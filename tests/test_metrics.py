@@ -378,5 +378,123 @@ class TestHistogramMaxHistory:
         assert stats.max == 199.0
 
 
+class TestLabeledMetricsExport:
+    """Test fixes for labeled metrics export issues."""
+
+    def test_prometheus_exports_all_labeled_histogram_series(self):
+        """Test that Prometheus export includes all histogram label variants.
+
+        Issue: Prometheus histogram export was skipping every histogram after
+        the first one that shared a metric name, dropping labeled series.
+        Fix: Track TYPE declarations separately from metric output.
+        """
+        collector = MetricsCollector()
+
+        # Create histograms with same name but different labels
+        collector.observe_histogram("request_duration", 100, {"endpoint": "chat"})
+        collector.observe_histogram("request_duration", 150, {"endpoint": "chat"})
+        collector.observe_histogram("request_duration", 50, {"endpoint": "search"})
+        collector.observe_histogram("request_duration", 75, {"endpoint": "search"})
+        collector.observe_histogram("request_duration", 200, {"endpoint": "admin"})
+
+        prom_output = collector.export_prometheus()
+
+        # Should have TYPE declaration exactly once
+        assert prom_output.count("# TYPE request_duration summary") == 1
+
+        # Should have all three labeled series
+        assert 'request_duration_count{endpoint="chat"}' in prom_output
+        assert 'request_duration_count{endpoint="search"}' in prom_output
+        assert 'request_duration_count{endpoint="admin"}' in prom_output
+
+        # Verify counts are correct
+        assert 'request_duration_count{endpoint="chat"} 2' in prom_output
+        assert 'request_duration_count{endpoint="search"} 2' in prom_output
+        assert 'request_duration_count{endpoint="admin"} 1' in prom_output
+
+        # Verify quantiles exist for all label sets
+        assert 'request_duration{quantile="0.5",endpoint="chat"}' in prom_output
+        assert 'request_duration{quantile="0.5",endpoint="search"}' in prom_output
+        assert 'request_duration{quantile="0.5",endpoint="admin"}' in prom_output
+
+    def test_get_summary_aggregates_labeled_counters(self):
+        """Test that get_summary aggregates counters across all label variants.
+
+        Issue: get_summary only checked for exact key matches, missing labeled metrics.
+        Fix: Aggregate all counter values for matching metric names.
+        """
+        collector = MetricsCollector()
+
+        # Create counters with same name but different labels
+        collector.increment_counter("queries_total", 100, {"endpoint": "chat"})
+        collector.increment_counter("queries_total", 200, {"endpoint": "search"})
+        collector.increment_counter("queries_total", 50, {"endpoint": "admin"})
+
+        summary = collector.get_summary()
+
+        # Should aggregate all variants
+        assert "queries_total" in summary["key_metrics"]
+        assert summary["key_metrics"]["queries_total"] == 350.0
+
+    def test_get_summary_aggregates_labeled_histograms(self):
+        """Test that get_summary aggregates histograms across all label variants.
+
+        Issue: get_summary only checked for exact key matches, missing labeled metrics.
+        Fix: Collect all histogram observations for matching metric names.
+        """
+        collector = MetricsCollector()
+
+        # Create histograms with same name but different labels
+        collector.observe_histogram("retrieval_latency_ms", 100, {"method": "bm25"})
+        collector.observe_histogram("retrieval_latency_ms", 200, {"method": "bm25"})
+        collector.observe_histogram("retrieval_latency_ms", 50, {"method": "faiss"})
+        collector.observe_histogram("retrieval_latency_ms", 75, {"method": "faiss"})
+
+        summary = collector.get_summary()
+
+        # Should aggregate all observations
+        assert "retrieval_latency_ms" in summary["key_metrics"]
+        metric_data = summary["key_metrics"]["retrieval_latency_ms"]
+
+        assert metric_data["count"] == 4
+        # Mean should be (100 + 200 + 50 + 75) / 4 = 106.25
+        assert abs(metric_data["mean"] - 106.25) < 0.01
+        # p95 should be 200 (sorted: [50, 75, 100, 200])
+        assert metric_data["p95"] == 200
+
+    def test_get_summary_prioritizes_counters_over_histograms(self):
+        """Test that get_summary returns counter if both counter and histogram exist."""
+        collector = MetricsCollector()
+
+        # Create both counter and histogram with same name
+        collector.increment_counter("queries_total", 500)
+        collector.observe_histogram("queries_total", 100)
+
+        summary = collector.get_summary()
+
+        # Should return counter value, not histogram
+        assert summary["key_metrics"]["queries_total"] == 500.0
+
+    def test_prometheus_mixed_labeled_and_unlabeled_histograms(self):
+        """Test Prometheus export handles mix of labeled and unlabeled histograms."""
+        collector = MetricsCollector()
+
+        # Mix of labeled and unlabeled
+        collector.observe_histogram("latency", 100)
+        collector.observe_histogram("latency", 200)
+        collector.observe_histogram("latency", 50, {"region": "us-east"})
+        collector.observe_histogram("latency", 75, {"region": "eu-west"})
+
+        prom_output = collector.export_prometheus()
+
+        # Should have TYPE declaration exactly once
+        assert prom_output.count("# TYPE latency summary") == 1
+
+        # Should have all three series (unlabeled + 2 labeled)
+        assert "latency_count 2" in prom_output  # Unlabeled
+        assert 'latency_count{region="us-east"} 1' in prom_output
+        assert 'latency_count{region="eu-west"} 1' in prom_output
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
