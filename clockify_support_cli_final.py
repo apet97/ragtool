@@ -68,6 +68,24 @@ from clockify_rag.retrieval import (
 from clockify_rag.metrics import get_metrics, time_operation
 from clockify_rag.utils import validate_ollama_url, compute_sha256
 
+# Re-export config constants for backward compatibility with tests
+# Tests import these directly from this module
+DEFAULT_TOP_K = config.DEFAULT_TOP_K
+DEFAULT_PACK_TOP = config.DEFAULT_PACK_TOP
+DEFAULT_THRESHOLD = config.DEFAULT_THRESHOLD
+DEFAULT_SEED = config.DEFAULT_SEED
+DEFAULT_NUM_CTX = config.DEFAULT_NUM_CTX
+DEFAULT_NUM_PREDICT = config.DEFAULT_NUM_PREDICT
+DEFAULT_RETRIES = config.DEFAULT_RETRIES
+GEN_MODEL = config.GEN_MODEL
+EMB_MODEL = config.EMB_MODEL
+OLLAMA_URL = config.OLLAMA_URL
+REFUSAL_STR = config.REFUSAL_STR
+CTX_TOKEN_BUDGET = config.CTX_TOKEN_BUDGET
+CHUNK_CHARS = config.CHUNK_CHARS
+CHUNK_OVERLAP = config.CHUNK_OVERLAP
+FILES = config.FILES
+
 # Rank 23: NLTK for sentence-aware chunking (with optional download control)
 _NLTK_AVAILABLE = False
 _NLTK_DOWNLOAD_ATTEMPTED = False
