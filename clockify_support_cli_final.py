@@ -2344,7 +2344,7 @@ def sanitize_question(q: str, max_length: int = 2000) -> str:
 
     # Check for null bytes first (specific check)
     if '\x00' in q:
-        raise ValueError("Question contains null bytes")
+        raise ValueError("Question contains control characters")
 
     # Check for control characters (except newline, tab, carriage return)
     if any(ord(c) < 32 and c not in '\n\r\t' for c in q):

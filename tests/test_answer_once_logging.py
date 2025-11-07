@@ -7,15 +7,8 @@ import clockify_support_cli_final as cli
 def test_answer_once_logs_retrieved_chunks_with_cache(monkeypatch):
     cli.QUERY_CACHE.clear()
 
-    # Enable chunk logging for this test
-    monkeypatch.setenv("RAG_LOG_INCLUDE_CHUNKS", "1")
-
-    # Reload config to pick up env var
-    import importlib
-    import clockify_rag.config
-    importlib.reload(clockify_rag.config)
-    from clockify_rag.config import LOG_QUERY_INCLUDE_CHUNKS
-    assert LOG_QUERY_INCLUDE_CHUNKS, "Chunks should be included for this test"
+    # Enable chunk logging for this test by monkeypatching the module constant
+    monkeypatch.setattr(cli, "LOG_QUERY_INCLUDE_CHUNKS", True)
 
     # Ensure rate limiter allows requests during the test
     monkeypatch.setattr(cli.RATE_LIMITER, "allow_request", lambda: True)
