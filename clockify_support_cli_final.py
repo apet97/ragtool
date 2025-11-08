@@ -67,6 +67,10 @@ from clockify_rag.retrieval import (
     tokenize,
     normalize_scores_zscore,
     DenseScoreStore,
+    QUERY_EXPANSIONS_ENV_VAR,
+    load_query_expansion_dict,
+    reset_query_expansion_cache,
+    set_query_expansion_path,
 )
 from clockify_rag.metrics import get_metrics, time_operation
 from clockify_rag.utils import (
