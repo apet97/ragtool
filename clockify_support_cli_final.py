@@ -52,7 +52,7 @@ import requests
 
 # Import all configuration and core functionality from package
 import clockify_rag.config as config
-from clockify_rag.config import KPI, LOG_QUERY_INCLUDE_CHUNKS, QUERY_LOG_FILE
+from clockify_rag.config import KPI, LOG_QUERY_INCLUDE_CHUNKS, QUERY_LOG_FILE, LOG_QUERY_INCLUDE_ANSWER, LOG_QUERY_ANSWER_PLACEHOLDER
 from clockify_rag.caching import QueryCache, RateLimiter, get_query_cache, get_rate_limiter
 from clockify_rag.chunking import build_chunks, sliding_chunks
 from clockify_rag.embedding import embed_texts, load_embedding_cache, save_embedding_cache, validate_ollama_embeddings, embed_local_batch
@@ -2115,11 +2115,18 @@ def ensure_index_ready(retries=0):
         logger.error("Failed to load artifacts after rebuild")
         sys.exit(1)
 
-    # Unpack dictionary result from library's load_index() into tuple for backward compatibility
-    chunks = result["chunks"]
-    vecs_n = result["vecs_n"]
-    bm = result["bm"]
-    hnsw = result.get("faiss_index")  # Note: was "hnsw" in old code, but library returns "faiss_index"
+    # Handle both dict (from library) and tuple (from test mocks) for backward compatibility
+    if isinstance(result, dict):
+        # Library's load_index() returns a dictionary
+        chunks = result["chunks"]
+        vecs_n = result["vecs_n"]
+        bm = result["bm"]
+        hnsw = result.get("faiss_index")  # Note: was "hnsw" in old code, but library returns "faiss_index"
+    elif isinstance(result, tuple):
+        # Test mocks return a tuple (chunks, vecs_n, bm, hnsw)
+        chunks, vecs_n, bm, hnsw = result
+    else:
+        raise TypeError(f"load_index() must return dict or tuple, got {type(result)}")
 
     return chunks, vecs_n, bm, hnsw
 
