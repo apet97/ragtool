@@ -25,12 +25,14 @@ def _mount_retries(sess: requests.Session, retries: int):
     concurrency and reduced latency on concurrent queries (10-20% improvement).
     """
     from requests.adapters import HTTPAdapter
+    backoff_factor = 0.5
+
     try:
         from urllib3.util.retry import Retry  # urllib3 v2
         retry_cls = Retry
         kwargs = dict(
             total=retries, connect=retries, read=retries, status=retries,
-            backoff_factor=0.5, raise_on_status=False,
+            backoff_factor=backoff_factor, raise_on_status=False,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=frozenset({"GET", "POST"}),
             respect_retry_after_header=True,
@@ -42,7 +44,7 @@ def _mount_retries(sess: requests.Session, retries: int):
         retry_cls = RetryOld
         kwargs = dict(
             total=retries, connect=retries, read=retries, status=retries,
-            backoff_factor=0.5, raise_on_status=False,
+            backoff_factor=backoff_factor, raise_on_status=False,
             status_forcelist=[429, 500, 502, 503, 504],
             method_whitelist=frozenset({"GET", "POST"}),
         )
@@ -58,6 +60,16 @@ def _mount_retries(sess: requests.Session, retries: int):
     )
     sess.mount("http://", adapter)
     sess.mount("https://", adapter)
+
+    # Log retry configuration for debugging network issues
+    if retries > 0:
+        logger.info(
+            f"HTTP retry adapter configured: retries={retries}, "
+            f"backoff_factor={backoff_factor}s, "
+            f"status_codes=[429,500,502,503,504]"
+        )
+    else:
+        logger.debug("HTTP retry adapter disabled (retries=0)")
 
 
 def get_session(retries=0, use_thread_local=True) -> requests.Session:

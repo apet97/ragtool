@@ -52,7 +52,9 @@ pip install urllib3==2.2.3 rank-bm25==0.2.2
 
 ## Setup Ollama
 
-Ensure Ollama is running and has the required models:
+### Local Ollama (Default)
+
+Ensure Ollama is running locally and has the required models:
 
 ```bash
 # Start Ollama server (in separate terminal)
@@ -64,6 +66,29 @@ curl http://127.0.0.1:11434/api/version
 # Pull required models
 ollama pull nomic-embed-text    # For embeddings (768-dim)
 ollama pull qwen2.5:32b          # For answer generation
+```
+
+### Remote Ollama (Company-Hosted)
+
+If you're using a company-hosted Ollama endpoint (e.g., `http://10.127.0.192:11434`), you don't need to run `ollama serve` locally. Instead, configure the endpoint:
+
+```bash
+# Set the remote Ollama URL
+export OLLAMA_URL=http://10.127.0.192:11434
+
+# Verify remote Ollama is accessible
+curl $OLLAMA_URL/api/version
+
+# Check available models on remote server
+curl $OLLAMA_URL/api/tags
+```
+
+**Important**: Remote endpoints may require increased timeouts, especially over VPN:
+
+```bash
+export OLLAMA_URL=http://10.127.0.192:11434
+export CHAT_READ_TIMEOUT=300
+export EMB_READ_TIMEOUT=180
 ```
 
 ---
@@ -122,8 +147,14 @@ Generated files:
 
 ### Interactive REPL (Recommended)
 
+**Local Ollama**:
 ```bash
 python3 clockify_support_cli_final.py chat
+```
+
+**Remote Ollama** (company-hosted endpoint):
+```bash
+OLLAMA_URL=http://10.127.0.192:11434 python3 clockify_support_cli_final.py chat
 ```
 
 **REPL commands**:
@@ -135,6 +166,7 @@ python3 clockify_support_cli_final.py chat
 **Example session**:
 ```
 Clockify Support CLI v5.5 - Type :exit to quit, :debug for diagnostics
+Using Ollama at: http://10.127.0.192:11434
 
 > How do I track time in Clockify?
 

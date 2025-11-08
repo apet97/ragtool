@@ -2148,6 +2148,9 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
     print("\n" + "=" * 70)
     print("CLOCKIFY SUPPORT – Local, Stateless, Closed-Book")
     print("=" * 70)
+    print(f"Using Ollama at: {config.OLLAMA_URL}")
+    print(f"Generation model: {config.GEN_MODEL}")
+    print(f"Embedding backend: {config.EMB_BACKEND}")
     print("Type a question. Commands: :exit, :debug")
 
     # v4.1: Warm-up on startup to reduce first-token latency
@@ -2245,6 +2248,15 @@ def main():
     # Note: Most config now in clockify_rag.config module (no global declaration needed)
     global QUERY_LOG_DISABLED
 
+    # Create parent parser for common flags shared across subcommands
+    common_flags = argparse.ArgumentParser(add_help=False)
+    common_flags.add_argument("--emb-backend", choices=["local", "ollama"], default=config.EMB_BACKEND,
+                             help="Embedding backend: local (SentenceTransformer) or ollama (default local)")
+    common_flags.add_argument("--ann", choices=["faiss", "none"], default=config.USE_ANN,
+                             help="ANN index: faiss (IVFFlat) or none (full-scan, default faiss)")
+    common_flags.add_argument("--alpha", type=float, default=config.ALPHA_HYBRID,
+                             help="Hybrid scoring blend: alpha*BM25 + (1-alpha)*dense (default 0.5)")
+
     ap = argparse.ArgumentParser(
         prog="clockify_support_cli",
         description="Clockify internal support chatbot (offline, stateless, closed-book)"
@@ -2265,46 +2277,37 @@ def main():
                     help="Context token budget (default from CTX_BUDGET env or 6000)")
     ap.add_argument("--query-expansions", type=str, default=None,
                     help="Path to JSON query expansion overrides (default config/query_expansions.json or CLOCKIFY_QUERY_EXPANSIONS env)")
+    # Global-only flags
+    ap.add_argument("--selftest", action="store_true", help="Run self-tests and exit (v4.1)")
+    ap.add_argument("--profile", action="store_true", help="Enable cProfile performance profiling (Rank 29)")
 
     subparsers = ap.add_subparsers(dest="cmd")
 
-    b = subparsers.add_parser("build", help="Build knowledge base")
+    # Build subparser with common flags
+    b = subparsers.add_parser("build", help="Build knowledge base", parents=[common_flags])
     b.add_argument("md_path", help="Path to knowledge_full.md")
     b.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Retries for transient errors (default 2)")
-    # v4.1: Add flags to build subparser for explicit control
-    b.add_argument("--emb-backend", choices=["local", "ollama"], default=config.EMB_BACKEND,
-                   help="Embedding backend: local (SentenceTransformer) or ollama (default local)")
-    b.add_argument("--ann", choices=["faiss", "none"], default=config.USE_ANN,
-                   help="ANN index: faiss (IVFFlat) or none (full-scan, default faiss)")
-    b.add_argument("--alpha", type=float, default=config.ALPHA_HYBRID,
-                   help="Hybrid scoring blend: alpha*BM25 + (1-alpha)*dense (default 0.5)")
 
-    c = subparsers.add_parser("chat", help="Start REPL")
+    # Chat subparser with common flags
+    c = subparsers.add_parser("chat", help="Start REPL", parents=[common_flags])
     c.add_argument("--debug", action="store_true", help="Print retrieval diagnostics")
     c.add_argument("--rerank", action="store_true", help="Enable LLM-based reranking")
     c.add_argument("--topk", type=int, default=config.DEFAULT_TOP_K, help="Top-K candidates (default 12)")
     c.add_argument("--pack", type=int, default=config.DEFAULT_PACK_TOP, help="Snippets to pack (default 6)")
     c.add_argument("--threshold", type=float, default=config.DEFAULT_THRESHOLD, help="Cosine threshold (default 0.30)")
     c.add_argument("--seed", type=int, default=config.DEFAULT_SEED, help="Random seed for LLM (default 42)")
-    c.add_argument("--num-ctx", type=int, default=config.DEFAULT_NUM_CTX, help="LLM context window (default 8192)")
+    c.add_argument("--num-ctx", type=int, default=config.DEFAULT_NUM_CTX, help=f"LLM context window (default {config.DEFAULT_NUM_CTX})")
     c.add_argument("--num-predict", type=int, default=config.DEFAULT_NUM_PREDICT, help="LLM max generation tokens (default 512)")
     c.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Retries for transient errors (default 2)")
-    # Task A: determinism check flags
     c.add_argument("--det-check", action="store_true", help="Determinism check: ask same Q twice, compare hashes")
-    # v4.1: Add flags to chat subparser for explicit control
-    c.add_argument("--emb-backend", choices=["local", "ollama"], default=config.EMB_BACKEND,
-                   help="Embedding backend: local (SentenceTransformer) or ollama (default local)")
-    c.add_argument("--ann", choices=["faiss", "none"], default=config.USE_ANN,
-                   help="ANN index: faiss (IVFFlat) or none (full-scan, default faiss)")
-    c.add_argument("--alpha", type=float, default=config.ALPHA_HYBRID,
-                   help="Hybrid scoring blend: alpha*BM25 + (1-alpha)*dense (default 0.5)")
     c.add_argument("--no-expand", action="store_true",
                    help="Disable query expansion (synonym substitution)")
     c.add_argument("--faiss-multiplier", type=int, default=config.FAISS_CANDIDATE_MULTIPLIER,
                    help="FAISS candidate multiplier: retrieve top_k * N for reranking (default 3)")
     c.add_argument("--json", action="store_true", help="Output answer as JSON with metrics (v4.1)")
 
-    a = subparsers.add_parser("ask", help="Answer a single question and exit")
+    # Ask subparser with common flags
+    a = subparsers.add_parser("ask", help="Answer a single question and exit", parents=[common_flags])
     a.add_argument("question", help="Question to answer")
     a.add_argument("--debug", action="store_true", help="Print retrieval diagnostics")
     a.add_argument("--rerank", action="store_true", help="Enable LLM-based reranking")
@@ -2312,31 +2315,14 @@ def main():
     a.add_argument("--pack", type=int, default=config.DEFAULT_PACK_TOP, help="Snippets to pack (default 6)")
     a.add_argument("--threshold", type=float, default=config.DEFAULT_THRESHOLD, help="Cosine threshold (default 0.30)")
     a.add_argument("--seed", type=int, default=config.DEFAULT_SEED, help="Random seed for LLM (default 42)")
-    a.add_argument("--num-ctx", type=int, default=config.DEFAULT_NUM_CTX, help="LLM context window (default 8192)")
+    a.add_argument("--num-ctx", type=int, default=config.DEFAULT_NUM_CTX, help=f"LLM context window (default {config.DEFAULT_NUM_CTX})")
     a.add_argument("--num-predict", type=int, default=config.DEFAULT_NUM_PREDICT, help="LLM max generation tokens (default 512)")
     a.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Retries for transient errors (default 2)")
-    a.add_argument("--emb-backend", choices=["local", "ollama"], default=config.EMB_BACKEND,
-                   help="Embedding backend: local (SentenceTransformer) or ollama (default local)")
-    a.add_argument("--ann", choices=["faiss", "none"], default=config.USE_ANN,
-                   help="ANN index: faiss (IVFFlat) or none (full-scan, default faiss)")
-    a.add_argument("--alpha", type=float, default=config.ALPHA_HYBRID,
-                   help="Hybrid scoring blend: alpha*BM25 + (1-alpha)*dense (default 0.5)")
     a.add_argument("--no-expand", action="store_true",
                    help="Disable query expansion (synonym substitution)")
     a.add_argument("--faiss-multiplier", type=int, default=config.FAISS_CANDIDATE_MULTIPLIER,
                    help="FAISS candidate multiplier: retrieve top_k * N for reranking (default 3)")
     a.add_argument("--json", action="store_true", help="Output answer as JSON with metrics (v4.1)")
-
-    # v4.1: Ollama optimization flags (Section 7)
-    ap.add_argument("--emb-backend", choices=["local", "ollama"], default=config.EMB_BACKEND,
-                   help="Embedding backend: local (SentenceTransformer) or ollama (default local)")
-    ap.add_argument("--ann", choices=["faiss", "none"], default=config.USE_ANN,
-                   help="ANN index: faiss (IVFFlat) or none (full-scan, default faiss)")
-    ap.add_argument("--alpha", type=float, default=config.ALPHA_HYBRID,
-                   help="Hybrid scoring blend: alpha*BM25 + (1-alpha)*dense (default 0.5)")
-    ap.add_argument("--selftest", action="store_true", help="Run self-tests and exit (v4.1)")
-    ap.add_argument("--json", action="store_true", help="Output answer as JSON with metrics (v4.1)")
-    ap.add_argument("--profile", action="store_true", help="Enable cProfile performance profiling (Rank 29)")
 
     args = ap.parse_args()
 

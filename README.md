@@ -47,6 +47,31 @@ pip install urllib3==2.2.3 rank-bm25==0.2.2
 
 For detailed M1 installation instructions, see [M1_COMPATIBILITY.md](M1_COMPATIBILITY.md).
 
+### Configure Ollama Endpoint
+
+**Local Ollama (Default)**:
+The system defaults to `http://127.0.0.1:11434` for local Ollama installations.
+
+**Remote Ollama (Company-Hosted)**:
+If using a company-hosted Ollama endpoint, set the `OLLAMA_URL` environment variable:
+
+```bash
+# Example: Using remote Ollama server
+export OLLAMA_URL=http://10.127.0.192:11434
+
+# Or inline for a single command
+OLLAMA_URL=http://10.127.0.192:11434 python3 clockify_support_cli_final.py chat
+```
+
+**Important**: Remote endpoints require network connectivity and may have different timeout requirements. Consider increasing timeouts for VPN or slow connections:
+
+```bash
+export OLLAMA_URL=http://10.127.0.192:11434
+export CHAT_READ_TIMEOUT=300
+export EMB_READ_TIMEOUT=180
+python3 clockify_support_cli_final.py chat
+```
+
 ### Build Knowledge Base
 ```bash
 # One-time setup: build the vector index
@@ -55,8 +80,11 @@ python3 clockify_support_cli_final.py build knowledge_full.md
 
 ### Run
 ```bash
-# Start interactive REPL
+# Start interactive REPL (local Ollama)
 python3 clockify_support_cli_final.py chat
+
+# With remote Ollama endpoint
+OLLAMA_URL=http://10.127.0.192:11434 python3 clockify_support_cli_final.py chat
 
 # With debug mode
 python3 clockify_support_cli_final.py chat --debug
