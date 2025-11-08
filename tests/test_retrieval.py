@@ -271,9 +271,10 @@ def test_retrieve_faiss_skips_full_dot(monkeypatch, sample_chunks, sample_embedd
     monkeypatch.setattr(cli, "_FAISS_INDEX", fake_index, raising=False)
     monkeypatch.setattr(cli, "USE_ANN", "faiss", raising=False)
 
-    # Avoid external embedding call
+    # Avoid external embedding call - patch in the retrieval module where it's actually called
     query_vec = sample_embeddings[0]
-    monkeypatch.setattr(cli, "embed_query", lambda question, retries=0: query_vec, raising=False)
+    import clockify_rag.retrieval as retrieval_module
+    monkeypatch.setattr(retrieval_module, "embed_query", lambda question, retries=0: query_vec, raising=False)
 
     selected, scores = cli.retrieve("How do I track time?", sample_chunks, tracker, sample_bm25, top_k=3)
 
