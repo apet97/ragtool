@@ -35,7 +35,7 @@ pytestmark = pytest.mark.skipif(
 
 # Import from package
 from clockify_rag import config
-from clockify_rag.indexing import build_faiss_index, load_faiss_index
+from clockify_rag.indexing import build_faiss_index, load_faiss_index, save_faiss_index
 
 
 @pytest.fixture
@@ -90,7 +90,7 @@ class TestFAISSIndexBuilding:
         index_path = os.path.join(temp_dir, "faiss_small.index")
 
         # Build index with small corpus
-        index = build_faiss_index(small_embeddings, index_path, nlist=64)
+        index = build_faiss_index(small_embeddings, nlist=64)
 
         # Should return index (fallback to Flat)
         assert index is not None
@@ -110,7 +110,7 @@ class TestFAISSIndexBuilding:
         index_path = os.path.join(temp_dir, "faiss_medium.index")
 
         # Build index with medium corpus
-        index = build_faiss_index(medium_embeddings, index_path, nlist=64)
+        index = build_faiss_index(medium_embeddings, nlist=64)
 
         assert index is not None
         assert index.ntotal == len(medium_embeddings)
@@ -130,7 +130,7 @@ class TestFAISSIndexBuilding:
         index_path = os.path.join(temp_dir, "faiss_large.index")
 
         # Build index with large corpus
-        index = build_faiss_index(large_embeddings, index_path, nlist=128)
+        index = build_faiss_index(large_embeddings, nlist=128)
 
         assert index is not None
         assert index.ntotal == len(large_embeddings)
@@ -148,7 +148,8 @@ class TestFAISSIndexBuilding:
         index_path = os.path.join(temp_dir, "faiss_persist.index")
 
         # Build and save index
-        index1 = build_faiss_index(medium_embeddings, index_path, nlist=64)
+        index1 = build_faiss_index(medium_embeddings, nlist=64)
+        save_faiss_index(index1, index_path)
         assert index1 is not None
         assert os.path.exists(index_path)
 
@@ -180,8 +181,10 @@ class TestFAISSIndexBuilding:
         index_path2 = os.path.join(temp_dir, "faiss_det2.index")
 
         # Build two indexes with same seed
-        index1 = build_faiss_index(large_embeddings, index_path1, nlist=64)
-        index2 = build_faiss_index(large_embeddings, index_path2, nlist=64)
+        index1 = build_faiss_index(large_embeddings, nlist=64)
+        save_faiss_index(index1, index_path1)
+        index2 = build_faiss_index(large_embeddings, nlist=64)
+        save_faiss_index(index2, index_path2)
 
         # Test that both give similar results (may differ slightly due to IVF)
         query = large_embeddings[0:1]
@@ -207,7 +210,7 @@ class TestFAISSThreadSafety:
         index_path = os.path.join(temp_dir, "faiss_concurrent.index")
 
         # Build index
-        index = build_faiss_index(medium_embeddings, index_path, nlist=64)
+        index = build_faiss_index(medium_embeddings, nlist=64)
         assert index is not None
         index.nprobe = 16
 
@@ -248,7 +251,8 @@ class TestFAISSThreadSafety:
         index_path = os.path.join(temp_dir, "faiss_load.index")
 
         # Build index
-        build_faiss_index(medium_embeddings, index_path, nlist=64)
+        index = build_faiss_index(medium_embeddings, nlist=64)
+        save_faiss_index(index, index_path)
 
         loaded_indexes = []
         errors = []
@@ -289,7 +293,7 @@ class TestFAISSSearchAccuracy:
         index_path = os.path.join(temp_dir, "faiss_accuracy.index")
 
         # Build index
-        index = build_faiss_index(medium_embeddings, index_path, nlist=64)
+        index = build_faiss_index(medium_embeddings, nlist=64)
         index.nprobe = 32  # High nprobe for better accuracy
 
         # Pick a random query
@@ -318,7 +322,7 @@ class TestFAISSSearchAccuracy:
         index_path = os.path.join(temp_dir, "faiss_nprobe.index")
 
         # Build index
-        index = build_faiss_index(large_embeddings, index_path, nlist=128)
+        index = build_faiss_index(large_embeddings, nlist=128)
 
         query = large_embeddings[100:101]
 
@@ -350,7 +354,7 @@ class TestFAISSARMMacCompatibility:
         index_path = os.path.join(temp_dir, "faiss_arm64.index")
 
         # This should not crash on ARM64 macOS
-        index = build_faiss_index(medium_embeddings, index_path, nlist=64)
+        index = build_faiss_index(medium_embeddings, nlist=64)
 
         assert index is not None
         assert index.ntotal == len(medium_embeddings)
@@ -375,7 +379,7 @@ class TestFAISSARMMacCompatibility:
 
         # This should complete without segfault
         start = time.time()
-        index = build_faiss_index(large_vecs, index_path, nlist=128)
+        index = build_faiss_index(large_vecs, nlist=128)
         elapsed = time.time() - start
 
         assert index is not None
@@ -393,7 +397,7 @@ class TestFAISSFallback:
         index_path = os.path.join(temp_dir, "faiss_empty.index")
         empty_vecs = np.array([], dtype=np.float32).reshape(0, 768)
 
-        index = build_faiss_index(empty_vecs, index_path, nlist=64)
+        index = build_faiss_index(empty_vecs, nlist=64)
 
         # Should return None or empty index
         if index is not None:
@@ -405,7 +409,7 @@ class TestFAISSFallback:
 
         # Build with 384-dim
         vecs_384 = np.random.randn(100, 384).astype(np.float32)
-        index = build_faiss_index(vecs_384, index_path, nlist=32)
+        index = build_faiss_index(vecs_384, nlist=32)
 
         # Try to search with 768-dim (should raise error)
         query_768 = np.random.randn(1, 768).astype(np.float32)
