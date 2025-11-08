@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import clockify_support_cli_final as rag
+from clockify_rag import config
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -47,10 +48,10 @@ def main() -> None:
     bm = rag.build_bm25(chunks)
 
     vecs = np.array([
-        np.roll(np.eye(rag.EMB_DIM, dtype="float32")[0], idx)
+        np.roll(np.eye(config.EMB_DIM, dtype="float32")[0], idx)
         for idx in range(len(chunks))
     ])
-    if vecs.shape[1] < rag.EMB_DIM:
+    if vecs.shape[1] < config.EMB_DIM:
         raise RuntimeError("Failed to create dummy embeddings with correct dimension")
 
     norms = np.linalg.norm(vecs, axis=1, keepdims=True)
@@ -78,13 +79,13 @@ def main() -> None:
         "chunks": len(chunks),
         "emb_rows": int(vecs_n.shape[0]),
         "bm25_docs": len(bm["doc_lens"]),
-        "gen_model": rag.GEN_MODEL,
-        "emb_model": "all-MiniLM-L6-v2" if rag.EMB_BACKEND == "local" else rag.EMB_MODEL,
-        "emb_backend": rag.EMB_BACKEND,
+        "gen_model": config.GEN_MODEL,
+        "emb_model": "all-MiniLM-L6-v2" if config.EMB_BACKEND == "local" else config.EMB_MODEL,
+        "emb_backend": config.EMB_BACKEND,
         "ann": "none",
-        "mmr_lambda": rag.MMR_LAMBDA,
-        "chunk_chars": rag.CHUNK_CHARS,
-        "chunk_overlap": rag.CHUNK_OVERLAP,
+        "mmr_lambda": config.MMR_LAMBDA,
+        "chunk_chars": config.CHUNK_CHARS,
+        "chunk_overlap": config.CHUNK_OVERLAP,
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "code_version": "ci-dummy",
     }
