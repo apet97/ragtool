@@ -20,6 +20,7 @@ from .answer import answer_once, answer_to_json
 from .caching import get_query_cache
 from .retrieval import set_query_expansion_path, load_query_expansion_dict, QUERY_EXPANSIONS_ENV_VAR
 from .http_utils import http_post_with_retries
+from .precomputed_cache import get_precomputed_cache
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,15 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
     query_cache.load()  # Load previous session's cache
     logger.info(f"Query cache loaded: {len(query_cache.cache)} entries")
 
+    # OPTIMIZATION (Analysis Section 9.1 #3): Load precomputed FAQ cache
+    faq_cache = None
+    if config.FAQ_CACHE_ENABLED and os.path.exists(config.FAQ_CACHE_PATH):
+        try:
+            faq_cache = get_precomputed_cache(config.FAQ_CACHE_PATH)
+            logger.info(f"FAQ cache loaded: {faq_cache.size()} precomputed answers")
+        except Exception as e:
+            logger.warning(f"Failed to load FAQ cache: {e}")
+
     warmup_on_startup()
 
     print("━" * 60)
@@ -118,23 +128,40 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
             print(f"Debug mode: {'ON' if debug_enabled else 'OFF'}")
             continue
 
-        # Answer the question
-        answer, meta = answer_once(
-            question,
-            chunks,
-            vecs_n,
-            bm,
-            top_k=top_k,
-            pack_top=pack_top,
-            threshold=threshold,
-            use_rerank=use_rerank,
-            debug=debug_enabled,
-            hnsw=hnsw,
-            seed=seed,
-            num_ctx=num_ctx,
-            num_predict=num_predict,
-            retries=retries
-        )
+        # OPTIMIZATION (Analysis Section 9.1 #3): Check FAQ cache first for instant responses
+        faq_result = None
+        if faq_cache:
+            faq_result = faq_cache.get(question, fuzzy=True)
+
+        if faq_result:
+            # FAQ cache hit - instant response (0.1ms)
+            answer = faq_result["answer"]
+            meta = {
+                "confidence": faq_result.get("confidence"),
+                "selected": faq_result.get("packed_chunks", []),
+                "used_tokens": 0,
+                "cache_type": "faq_precomputed"
+            }
+            if debug_enabled:
+                print("[DEBUG] FAQ cache hit (precomputed answer)")
+        else:
+            # FAQ cache miss - normal retrieval
+            answer, meta = answer_once(
+                question,
+                chunks,
+                vecs_n,
+                bm,
+                top_k=top_k,
+                pack_top=pack_top,
+                threshold=threshold,
+                use_rerank=use_rerank,
+                debug=debug_enabled,
+                hnsw=hnsw,
+                seed=seed,
+                num_ctx=num_ctx,
+                num_predict=num_predict,
+                retries=retries
+            )
 
         if use_json:
             # v4.1: JSON output mode

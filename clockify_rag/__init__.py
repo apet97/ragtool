@@ -119,6 +119,14 @@ from .confidence_routing import (
     CONFIDENCE_ESCALATE,
 )
 
+# Precomputed FAQ cache (Analysis Section 9.1 #3)
+from .precomputed_cache import (
+    PrecomputedCache,
+    build_faq_cache,
+    load_faq_list,
+    get_precomputed_cache,
+)
+
 __all__ = [
     # Version
     "__version__",
@@ -155,4 +163,6 @@ __all__ = [
     "ConfidenceLevel", "classify_confidence", "should_escalate",
     "get_routing_action", "log_routing_decision",
     "CONFIDENCE_HIGH", "CONFIDENCE_GOOD", "CONFIDENCE_MEDIUM", "CONFIDENCE_ESCALATE",
+    # Precomputed FAQ cache
+    "PrecomputedCache", "build_faq_cache", "load_faq_list", "get_precomputed_cache",
 ]

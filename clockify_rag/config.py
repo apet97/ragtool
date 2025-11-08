@@ -240,3 +240,8 @@ RERANK_MAX_CHUNKS = 12  # Maximum chunks to send to reranking
 
 # Retrieval thresholds (Quick Win #6)
 COVERAGE_MIN_CHUNKS = 2  # Minimum chunks above threshold to proceed
+
+# ====== PRECOMPUTED FAQ CACHE (Analysis Section 9.1 #3) ======
+# OPTIMIZATION: Pre-generate answers for top FAQs for 100% cache hit on common queries
+FAQ_CACHE_ENABLED = _get_bool_env("FAQ_CACHE_ENABLED", "0")  # Disabled by default (requires build step)
+FAQ_CACHE_PATH = os.environ.get("FAQ_CACHE_PATH", "faq_cache.json")  # Path to precomputed cache file
