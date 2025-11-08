@@ -52,6 +52,7 @@ import requests
 
 # Import all configuration and core functionality from package
 import clockify_rag.config as config
+from clockify_rag.config import KPI, LOG_QUERY_INCLUDE_CHUNKS, QUERY_LOG_FILE
 from clockify_rag.caching import QueryCache, RateLimiter, get_query_cache, get_rate_limiter
 from clockify_rag.chunking import build_chunks, sliding_chunks
 from clockify_rag.embedding import embed_texts, load_embedding_cache, save_embedding_cache, validate_ollama_embeddings, embed_local_batch
