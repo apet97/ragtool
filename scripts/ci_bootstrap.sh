@@ -40,18 +40,21 @@ case "$MODE" in
         ;;
 
     test)
-        # Test deps including ML but not FAISS
+        # Test deps including ML but not FAISS (for CI speed)
         echo "Installing: core deps + sentence-transformers (no FAISS)"
-        $PYTHON -m pip install -r requirements.txt || {
-            echo "⚠️  Warning: Full requirements.txt failed, falling back to minimal"
-            $PYTHON -m pip install numpy requests nltk rank-bm25 pytest pytest-cov
-            $PYTHON -m pip install sentence-transformers torch --no-deps || true
-        }
+        # Install core dependencies
+        $PYTHON -m pip install numpy requests nltk rank-bm25
+        # Install test tools
+        $PYTHON -m pip install pytest pytest-cov pytest-xdist
+        # Install ML dependencies (without FAISS for speed)
+        $PYTHON -m pip install sentence-transformers torch
+        # Install remaining deps from requirements.txt (excluding heavy ones)
+        $PYTHON -m pip install urllib3==2.2.3 || true
         ;;
 
     full)
-        # Full production deps
-        echo "Installing: all production dependencies"
+        # Full production deps (including FAISS)
+        echo "Installing: all production dependencies (including FAISS)"
         $PYTHON -m pip install -r requirements.txt
         ;;
 
@@ -71,8 +74,8 @@ import importlib
 
 critical_imports = {
     'minimal': ['numpy', 'requests'],
-    'test': ['numpy', 'requests', 'nltk', 'pytest'],
-    'full': ['numpy', 'requests', 'nltk', 'pytest', 'sentence_transformers']
+    'test': ['numpy', 'requests', 'nltk', 'pytest', 'sentence_transformers', 'torch'],
+    'full': ['numpy', 'requests', 'nltk', 'pytest', 'sentence_transformers', 'torch']
 }
 
 mode = '${MODE}'
