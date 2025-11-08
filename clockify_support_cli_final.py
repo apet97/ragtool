@@ -109,6 +109,11 @@ from clockify_rag.http_utils import (
     http_post_with_retries,
     _mount_retries
 )
+from clockify_rag.retrieval import (
+    rerank_with_llm,
+    truncate_to_token_budget
+)
+from clockify_rag.caching import log_query
 
 # Re-export config constants for backward compatibility with tests
 # Tests import these directly from this module
@@ -435,35 +440,6 @@ PASSAGES:
 
 
 
-def truncate_to_token_budget(text: str, budget: int) -> str:
-    """Truncate text to fit token budget, append ellipsis - Task C.
-
-    Uses accurate token counting when available (Rank 5).
-    """
-    est_tokens = count_tokens(text)
-    if est_tokens <= budget:
-        return text
-
-    # Binary search for optimal truncation point
-    # Start with heuristic estimate
-    target_chars = budget * 4
-    if len(text) <= target_chars:
-        return text
-
-    # Iteratively truncate until we fit the budget
-    low, high = 0, len(text)
-    result = text[:target_chars]
-
-    while low < high:
-        mid = (low + high + 1) // 2
-        candidate = text[:mid]
-        if count_tokens(candidate) <= budget:
-            result = candidate
-            low = mid
-        else:
-            high = mid - 1
-
-    return result + " […]" if result != text else text
 
 # ====== REMOVED REDUNDANT IMPLEMENTATIONS (2025-11-08) ======
 # The following KB parsing, embedding, and retrieval functions were removed
@@ -488,102 +464,6 @@ def truncate_to_token_budget(text: str, budget: int) -> str:
 # - Thread-safe operations
 # ============================================================
 
-def rerank_with_llm(question: str, chunks, selected, scores, seed=config.DEFAULT_SEED, num_ctx=config.DEFAULT_NUM_CTX, num_predict=config.DEFAULT_NUM_PREDICT, retries=0) -> tuple:
-    """Optional: rerank MMR-selected passages with LLM - Task B.
-
-    Returns: (order, scores, rerank_applied, rerank_reason)
-    """
-    if len(selected) <= 1:
-        return selected, {}, False, "disabled"
-
-    # Build passage list
-    passages_text = "\n\n".join([
-        f"[id={chunks[i]['id']}]\n{chunks[i]['text'][:config.RERANK_SNIPPET_MAX_CHARS]}"
-        for i in selected
-    ])
-    payload = {
-        "model": config.GEN_MODEL,
-        "options": {
-            "temperature": 0,
-            "seed": seed,
-            "num_ctx": num_ctx,
-            "num_predict": num_predict,
-            "top_p": 0.9,
-            "top_k": 40,
-            "repeat_penalty": 1.05
-        },
-        "messages": [
-            {"role": "user", "content": RERANK_PROMPT.format(q=question, passages=passages_text)}
-        ],
-        "stream": False
-    }
-
-    rerank_scores = {}
-    sess = get_session(retries=retries)
-    try:
-        # Task G: use tuple timeouts
-        r = sess.post(
-            f"{config.OLLAMA_URL}/api/chat",
-            json=payload,
-            timeout=(CHAT_CONNECT_T, config.RERANK_READ_T),
-            allow_redirects=False
-        )
-        r.raise_for_status()
-        resp = r.json()
-        msg = (resp.get("message") or {}).get("content", "").strip()
-
-        if not msg:
-            # Task B: rerank failure - empty response
-            logger.debug("info: rerank=fallback reason=empty")
-            return selected, rerank_scores, False, "empty"
-
-        # Try to parse strict JSON array
-        try:
-            ranked = json.loads(msg)
-            if not isinstance(ranked, list):
-                logger.debug("info: rerank=fallback reason=json")
-                return selected, rerank_scores, False, "json"
-
-            # Map back to indices
-            cid_to_idx = {chunks[i]["id"]: i for i in selected}
-            reranked = []
-            for entry in ranked:
-                idx = cid_to_idx.get(entry.get("id"))
-                if idx is not None:
-                    score = entry.get("score", 0)
-                    rerank_scores[idx] = score
-                    reranked.append((idx, score))
-
-            if reranked:
-                reranked.sort(key=lambda x: x[1], reverse=True)
-                return [idx for idx, _ in reranked], rerank_scores, True, ""
-            else:
-                logger.debug("info: rerank=fallback reason=empty")
-                return selected, rerank_scores, False, "empty"
-        except json.JSONDecodeError:
-            # Task B: JSON parse failed, fall back to MMR order
-            logger.debug("info: rerank=fallback reason=json")
-            return selected, rerank_scores, False, "json"
-    except requests.exceptions.Timeout as e:
-        # Task B: timeout
-        logger.debug("info: rerank=fallback reason=timeout")
-        return selected, rerank_scores, False, "timeout"
-    except requests.exceptions.ConnectionError as e:
-        # Task B: connection error
-        logger.debug("info: rerank=fallback reason=conn")
-        return selected, rerank_scores, False, "conn"
-    except requests.exceptions.HTTPError as e:
-        # Task B: HTTP error
-        logger.debug(f"info: rerank=fallback reason=http")
-        return selected, rerank_scores, False, "http"
-    except requests.exceptions.RequestException:
-        # HTTP error, fall back to MMR order
-        logger.debug("info: rerank=fallback reason=http")
-        return selected, rerank_scores, False, "http"
-    except Exception:
-        # Unexpected error, fall back to MMR order
-        logger.debug("info: rerank=fallback reason=http")
-        return selected, rerank_scores, False, "http"
 
 # ====== REMOVED REDUNDANT IMPLEMENTATIONS (2025-11-08) ======
 # The following helper and indexing functions were removed as they duplicate
@@ -691,93 +571,6 @@ RATE_LIMITER = get_rate_limiter()
 QUERY_CACHE = get_query_cache()
 
 # ====== STRUCTURED LOGGING ======
-def log_query(query, answer, retrieved_chunks, latency_ms, refused=False, metadata=None):
-    """Log query with structured JSON format for monitoring and analytics.
-
-    Args:
-        query: User question string
-        answer: Generated answer text
-        retrieved_chunks: List of retrieved chunk dicts with scores
-        latency_ms: Total query latency in milliseconds
-        refused: Whether answer was refused (returned config.REFUSAL_STR)
-        metadata: Optional dict with additional metadata (debug, backend, etc.)
-    """
-    # Early exit if logging is disabled (Rank 7: avoid needless work)
-    if QUERY_LOG_DISABLED:
-        return
-
-    # Priority #19: Build minimal representations when chunks disabled to avoid unnecessary copying
-    normalized_chunks = []
-    for chunk in retrieved_chunks:
-        if isinstance(chunk, dict):
-            chunk_id = chunk.get("id") or chunk.get("chunk_id")
-            dense = float(chunk.get("dense", chunk.get("score", 0.0)))
-            bm25 = float(chunk.get("bm25", 0.0))
-            hybrid = float(chunk.get("hybrid", dense))
-
-            if LOG_QUERY_INCLUDE_CHUNKS:
-                # Full copy with text when chunks enabled
-                normalized = chunk.copy()
-                normalized["id"] = chunk_id
-                normalized["dense"] = dense
-                normalized["bm25"] = bm25
-                normalized["hybrid"] = hybrid
-            else:
-                # Minimal representation without copying full chunk (Priority #19 optimization)
-                normalized = {
-                    "id": chunk_id,
-                    "dense": dense,
-                    "bm25": bm25,
-                    "hybrid": hybrid,
-                }
-        else:
-            normalized = {
-                "id": chunk,
-                "dense": 0.0,
-                "bm25": 0.0,
-                "hybrid": 0.0,
-            }
-        normalized_chunks.append(normalized)
-
-    chunk_ids = [c.get("id") for c in normalized_chunks]
-    dense_scores = [c.get("dense", 0.0) for c in normalized_chunks]
-    bm25_scores = [c.get("bm25", 0.0) for c in normalized_chunks]
-    hybrid_scores = [c.get("hybrid", 0.0) for c in normalized_chunks]
-    primary_scores = hybrid_scores if hybrid_scores else []
-
-    # Honor LOG_QUERY_INCLUDE_ANSWER flag (Rank 15)
-    entry_answer = answer if LOG_QUERY_INCLUDE_ANSWER else LOG_QUERY_ANSWER_PLACEHOLDER
-
-    log_entry = {
-        "timestamp": time.time(),
-        "timestamp_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "query": query,
-        "query_length": len(query),
-        "answer": entry_answer,
-        "answer_length": len(answer),
-        "num_chunks_retrieved": len(chunk_ids),
-        "chunk_ids": chunk_ids,
-        "chunk_scores": {
-            "dense": dense_scores,
-            "bm25": bm25_scores,
-            "hybrid": hybrid_scores,
-        },
-        "retrieved_chunks": normalized_chunks,
-        "avg_chunk_score": float(np.mean(primary_scores)) if primary_scores else 0.0,
-        "max_chunk_score": float(np.max(primary_scores)) if primary_scores else 0.0,
-        "latency_ms": latency_ms,
-        "refused": refused,
-        "metadata": metadata or {},
-    }
-
-    try:
-        # Ensure parent directory exists (Rank 19)
-        log_path = pathlib.Path(QUERY_LOG_FILE)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(log_entry) + "\n")
-    except Exception as e:
-        logger.warning(f"Failed to write query log: {e}")
 
 # ====== ANSWER PIPELINE HELPERS ======
 
