@@ -14,8 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import clockify_support_cli_final as rag
-from clockify_rag import config
+from clockify_rag import config, build_bm25, compute_sha256
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -45,7 +44,7 @@ def main() -> None:
             }
         )
 
-    bm = rag.build_bm25(chunks)
+    bm = build_bm25(chunks)
 
     vecs = np.array([
         np.roll(np.eye(config.EMB_DIM, dtype="float32")[0], idx)
@@ -58,10 +57,10 @@ def main() -> None:
     norms[norms == 0] = 1.0
     vecs_n = (vecs / norms).astype("float32")
 
-    chunks_path = REPO_ROOT / rag.FILES["chunks"]
-    emb_path = REPO_ROOT / rag.FILES["emb"]
-    bm25_path = REPO_ROOT / rag.FILES["bm25"]
-    meta_path = REPO_ROOT / rag.FILES["index_meta"]
+    chunks_path = REPO_ROOT / config.FILES["chunks"]
+    emb_path = REPO_ROOT / config.FILES["emb"]
+    bm25_path = REPO_ROOT / config.FILES["bm25"]
+    meta_path = REPO_ROOT / config.FILES["index_meta"]
 
     _write_jsonl(chunks_path, chunks)
     np.save(emb_path, vecs_n)
@@ -70,7 +69,7 @@ def main() -> None:
 
     kb_path = REPO_ROOT / "knowledge_full.md"
     if kb_path.exists():
-        kb_sha = rag.compute_sha256(str(kb_path))
+        kb_sha = compute_sha256(str(kb_path))
     else:
         kb_sha = "dummy"
 
