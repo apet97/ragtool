@@ -5,13 +5,13 @@ Clockify Internal Support CLI – Stateless RAG with Hybrid Retrieval
 HOW TO RUN
 ==========
   # Build knowledge base (one-time)
-  python3 clockify_support_cli.py build knowledge_full.md
+  python3 clockify_support_cli_final.py build knowledge_full.md
 
   # Start interactive REPL
-  python3 clockify_support_cli.py chat [--debug] [--rerank] [--topk 12] [--pack 6] [--threshold 0.30]
+  python3 clockify_support_cli_final.py chat [--debug] [--rerank] [--topk 12] [--pack 6] [--threshold 0.30]
 
   # Or auto-start REPL with no args
-  python3 clockify_support_cli.py
+  python3 clockify_support_cli_final.py
 
 DESIGN
 ======
@@ -54,8 +54,8 @@ import requests
 import clockify_rag.config as config
 from clockify_rag.caching import QueryCache, RateLimiter, get_query_cache, get_rate_limiter
 from clockify_rag.chunking import build_chunks, sliding_chunks
-from clockify_rag.embedding import embed_texts
-from clockify_rag.indexing import build, load_index, build_bm25, bm25_scores, build_faiss_index
+from clockify_rag.embedding import embed_texts, load_embedding_cache, save_embedding_cache, validate_ollama_embeddings, embed_local_batch
+from clockify_rag.indexing import build, load_index, build_bm25, bm25_scores, build_faiss_index, save_faiss_index
 from clockify_rag.retrieval import (
     expand_query,
     embed_query,
@@ -69,7 +69,17 @@ from clockify_rag.retrieval import (
     DenseScoreStore,
 )
 from clockify_rag.metrics import get_metrics, time_operation
-from clockify_rag.utils import validate_ollama_url, compute_sha256
+from clockify_rag.utils import (
+    validate_ollama_url,
+    compute_sha256,
+    build_lock,
+    atomic_write_json,
+    atomic_write_jsonl,
+    atomic_save_npy,
+    _fsync_dir,
+    norm_ws,
+    strip_noise
+)
 
 # Re-export config constants for backward compatibility with tests
 # Tests import these directly from this module
@@ -234,7 +244,7 @@ def get_session(retries=0):
 def http_post_with_retries(url, json_payload, retries=3, backoff=0.5, timeout=None):
     """POST with exponential backoff retry."""
     if timeout is None:
-        timeout = (EMB_CONNECT_T, config.EMB_READ_T)
+        timeout = (config.EMB_CONNECT_T, config.EMB_READ_T)
     s = get_session()
     last_error = None
     for attempt in range(retries):
@@ -1188,7 +1198,7 @@ def validate_ollama_embeddings(sample_text: str = "test") -> tuple:
         r = sess.post(
             f"{config.OLLAMA_URL}/api/embeddings",
             json={"model": config.EMB_MODEL, "prompt": sample_text},  # Use "prompt" not "input"
-            timeout=(EMB_CONNECT_T, config.EMB_READ_T),
+            timeout=(config.EMB_CONNECT_T, config.EMB_READ_T),
             allow_redirects=False
         )
         r.raise_for_status()
@@ -1269,7 +1279,7 @@ def embed_texts(texts, retries=0):
             r = sess.post(
                 f"{config.OLLAMA_URL}/api/embeddings",
                 json={"model": config.EMB_MODEL, "prompt": t},
-                timeout=(EMB_CONNECT_T, config.EMB_READ_T),
+                timeout=(config.EMB_CONNECT_T, config.EMB_READ_T),
                 allow_redirects=False
             )
             r.raise_for_status()
@@ -1462,7 +1472,7 @@ def embed_query(question: str, retries=0) -> np.ndarray:
         r = sess.post(
             f"{config.OLLAMA_URL}/api/embeddings",
             json={"model": config.EMB_MODEL, "prompt": question},
-            timeout=(EMB_CONNECT_T, config.EMB_READ_T),
+            timeout=(config.EMB_CONNECT_T, config.EMB_READ_T),
             allow_redirects=False
         )
         r.raise_for_status()
@@ -3308,7 +3318,7 @@ def main():
     ap.add_argument("--emb-model", type=str, default=None,
                     help="Embedding model name (default from config.EMB_MODEL env or nomic-embed-text)")
     ap.add_argument("--ctx-budget", type=int, default=None,
-                    help="Context token budget (default from CTX_BUDGET env or 2800)")
+                    help="Context token budget (default from CTX_BUDGET env or 6000)")
     ap.add_argument("--query-expansions", type=str, default=None,
                     help="Path to JSON query expansion overrides (default config/query_expansions.json or CLOCKIFY_QUERY_EXPANSIONS env)")
 
@@ -3316,7 +3326,7 @@ def main():
 
     b = subparsers.add_parser("build", help="Build knowledge base")
     b.add_argument("md_path", help="Path to knowledge_full.md")
-    b.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Retries for transient errors (default 0)")
+    b.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Retries for transient errors (default 2)")
     # v4.1: Add flags to build subparser for explicit control
     b.add_argument("--emb-backend", choices=["local", "ollama"], default=config.EMB_BACKEND,
                    help="Embedding backend: local (SentenceTransformer) or ollama (default local)")
@@ -3334,7 +3344,7 @@ def main():
     c.add_argument("--seed", type=int, default=config.DEFAULT_SEED, help="Random seed for LLM (default 42)")
     c.add_argument("--num-ctx", type=int, default=config.DEFAULT_NUM_CTX, help="LLM context window (default 8192)")
     c.add_argument("--num-predict", type=int, default=config.DEFAULT_NUM_PREDICT, help="LLM max generation tokens (default 512)")
-    c.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Retries for transient errors (default 0)")
+    c.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Retries for transient errors (default 2)")
     # Task A: determinism check flags
     c.add_argument("--det-check", action="store_true", help="Determinism check: ask same Q twice, compare hashes")
     # v4.1: Add flags to chat subparser for explicit control
@@ -3360,7 +3370,7 @@ def main():
     a.add_argument("--seed", type=int, default=config.DEFAULT_SEED, help="Random seed for LLM (default 42)")
     a.add_argument("--num-ctx", type=int, default=config.DEFAULT_NUM_CTX, help="LLM context window (default 8192)")
     a.add_argument("--num-predict", type=int, default=config.DEFAULT_NUM_PREDICT, help="LLM max generation tokens (default 512)")
-    a.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Retries for transient errors (default 0)")
+    a.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Retries for transient errors (default 2)")
     a.add_argument("--emb-backend", choices=["local", "ollama"], default=config.EMB_BACKEND,
                    help="Embedding backend: local (SentenceTransformer) or ollama (default local)")
     a.add_argument("--ann", choices=["faiss", "none"], default=config.USE_ANN,
