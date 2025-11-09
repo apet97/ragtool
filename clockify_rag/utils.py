@@ -11,7 +11,7 @@ import tempfile
 import time
 import unicodedata
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Dict, Optional
 
 import numpy as np
 
@@ -293,6 +293,18 @@ def _log_config_summary(use_rerank=False, pack_top=None, seed=None, threshold=No
     top_k = top_k or DEFAULT_TOP_K
     num_ctx = num_ctx or DEFAULT_NUM_CTX
     num_predict = num_predict or DEFAULT_NUM_PREDICT
+
+    # IMPROVEMENT: Log platform and architecture for M1 compatibility verification
+    # See: CODEBASE_HEALTH_REVIEW_2025-11-09.md - Apple Silicon (M1/M2/M3) Compatibility
+    import platform
+    sys_platform = platform.system()
+    sys_arch = platform.machine()
+    is_macos_arm64 = sys_platform == "Darwin" and sys_arch == "arm64"
+
+    if is_macos_arm64:
+        logger.info(f"PLATFORM platform={sys_platform} arch={sys_arch} (Apple Silicon detected - using M1-optimized settings)")
+    else:
+        logger.info(f"PLATFORM platform={sys_platform} arch={sys_arch}")
 
     proxy_trust = 1 if os.getenv("ALLOW_PROXIES") == "1" else 0
     # Single-line CONFIG banner

@@ -53,7 +53,7 @@ Response (answer with citations or "I don't know based on the MD.")
 - `numpy==2.3.4` – Numerical arrays (embeddings, vectors)
 
 **External services**:
-- Ollama (default: http://127.0.0.1:11434, configurable via OLLAMA_URL) with models:
+- Ollama (configurable via `OLLAMA_URL` environment variable, defaults to `http://127.0.0.1:11434`) with models:
   - `nomic-embed-text` – 768-dim semantic embeddings
   - `qwen2.5:32b` – LLM for answer generation
 
@@ -71,11 +71,13 @@ Response (answer with citations or "I don't know based on the MD.")
 **v2.0 (Recommended)**:
 ```bash
 source rag_env/bin/activate
-python3 clockify_support_cli.py build knowledge_full.md
+python3 clockify_support_cli_final.py build knowledge_full.md
 ```
 Creates: `chunks.jsonl`, `vecs_n.npy`, `meta.jsonl`, `bm25.json`, `index.meta.json`
 
-**v1.0**:
+**Note**: `clockify_support_cli.py` is a compatibility wrapper that calls `clockify_support_cli_final.py` - both work identically.
+
+**v1.0** (legacy):
 ```bash
 source rag_env/bin/activate
 python3 clockify_rag.py chunk
@@ -88,11 +90,11 @@ Creates: `chunks.jsonl`, `vecs.npy`, `meta.jsonl`
 **v2.0 (Interactive REPL)**:
 ```bash
 source rag_env/bin/activate
-python3 clockify_support_cli.py chat [--debug]
+python3 clockify_support_cli_final.py chat [--debug]
 ```
 Then type questions at the prompt. Type `:exit` to quit, `:debug` to toggle diagnostics.
 
-**v1.0 (Single Query)**:
+**v1.0 (Single Query)** (legacy):
 ```bash
 source rag_env/bin/activate
 python3 clockify_rag.py ask "Your question here"
@@ -102,7 +104,7 @@ python3 clockify_rag.py ask "Your question here"
 
 **v2.0 with debug output**:
 ```bash
-python3 clockify_support_cli.py chat --debug
+python3 clockify_support_cli_final.py chat --debug
 > :debug
 > Your question
 [Shows retrieved chunks, scores, ranking]
@@ -111,7 +113,7 @@ python3 clockify_support_cli.py chat --debug
 **Rebuild index** (if corrupted):
 ```bash
 rm -f chunks.jsonl vecs_n.npy meta.jsonl bm25.json index.meta.json
-python3 clockify_support_cli.py build knowledge_full.md
+python3 clockify_support_cli_final.py build knowledge_full.md
 ```
 
 ## Thread Safety
