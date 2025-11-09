@@ -14,7 +14,7 @@ tiktoken>=0.5.0
 
 # Embeddings and retrieval
 sentence-transformers==3.3.1
-torch==2.4.2
+torch>=2.3.0,<2.6.0  # Cross-platform compatible (see pyproject.toml)
 rank-bm25==0.2.2
 nltk==3.9.1  # Rank 23: Sentence-aware chunking
 

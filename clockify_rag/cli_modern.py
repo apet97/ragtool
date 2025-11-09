@@ -477,8 +477,19 @@ def eval(
         console.print(f"📥 Loaded index with {len(chunks)} chunks")
         console.print(f"📊 Metrics: {metrics}")
 
-        # TODO: Implement RAGAS evaluation loop
-        console.print("⚠️  Evaluation not yet implemented")
+        # FUTURE FEATURE: RAGAS evaluation loop
+        # Planned implementation:
+        # 1. Load questions from JSONL
+        # 2. Generate answers using answer_once()
+        # 3. Compute RAGAS metrics (faithfulness, answer_relevancy, etc.)
+        # 4. Generate report with scores and analysis
+        # 5. Save to output_dir
+        #
+        # For now, use eval.py script for evaluation.
+        console.print("⚠️  RAGAS evaluation via CLI not yet implemented")
+        console.print("💡 Use eval.py script instead:")
+        console.print(f"   python eval.py --dataset {questions_file}")
+        raise typer.Exit(0)
 
     except Exception as e:
         console.print(f"❌ Evaluation failed: {e}")

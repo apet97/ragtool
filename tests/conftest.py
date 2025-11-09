@@ -5,10 +5,56 @@ import numpy as np
 import json
 import tempfile
 import os
+import sys
 
 # Import from refactored package modules
-import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def pytest_configure(config):
+    """Validate test environment has required dependencies.
+
+    This hook runs before any tests and ensures all required dependencies
+    are installed. It exits with an error if critical dependencies are missing,
+    and warns about optional dependencies.
+    """
+    missing = []
+
+    # Check required dependencies
+    try:
+        import numpy
+    except ImportError:
+        missing.append("numpy")
+
+    try:
+        import requests
+    except ImportError:
+        missing.append("requests")
+
+    if missing:
+        pytest.exit(
+            f"\nERROR: Missing required test dependencies: {', '.join(missing)}\n"
+            f"Install with: pip install -e '.[dev]'\n",
+            returncode=1
+        )
+
+    # Check optional dependencies (just warn)
+    optional_missing = []
+    try:
+        import faiss
+    except ImportError:
+        optional_missing.append("faiss-cpu")
+
+    try:
+        import torch
+    except ImportError:
+        optional_missing.append("torch")
+
+    if optional_missing and config.option.verbose >= 0:
+        print(f"\nWARNING: Optional dependencies not installed: {', '.join(optional_missing)}")
+        print("Some tests may be skipped. Install with: pip install -e '.[dev]'\n")
+
+
 from clockify_rag.indexing import build_bm25
 from clockify_rag.config import DEFAULT_TOP_K
 

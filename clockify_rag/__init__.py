@@ -7,7 +7,7 @@ A production-ready Retrieval-Augmented Generation system with:
 - Full offline operation
 """
 
-__version__ = "5.0.0"
+__version__ = "5.9.1"
 
 # Core exceptions
 from .exceptions import (
@@ -127,6 +127,14 @@ from .precomputed_cache import (
     get_precomputed_cache,
 )
 
+# Logging configuration (Issue #11: Centralized logging)
+from .logging_config import (
+    setup_logging,
+    get_logger,
+    JSONFormatter,
+    TextFormatter,
+)
+
 __all__ = [
     # Version
     "__version__",
@@ -165,6 +173,8 @@ __all__ = [
     "CONFIDENCE_HIGH", "CONFIDENCE_GOOD", "CONFIDENCE_MEDIUM", "CONFIDENCE_ESCALATE",
     # Precomputed FAQ cache
     "PrecomputedCache", "build_faq_cache", "load_faq_list", "get_precomputed_cache",
+    # Logging
+    "setup_logging", "get_logger", "JSONFormatter", "TextFormatter",
 ]
 
 

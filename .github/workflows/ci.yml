@@ -82,7 +82,7 @@ jobs:
           python -c "import sys; print(f'Python: {sys.version}')"
 
       - name: Run unit tests
-        run: pytest tests/ -v --tb=short -x --ignore=tests/test_integration.py 2>&1 | head -100
+        run: pytest tests/ -v --tb=short -x --ignore=tests/test_integration.py --cov=clockify_rag --cov-report=term 2>&1 | head -100
 
       - name: Run integration tests (Ubuntu only)
         if: runner.os == 'Linux'

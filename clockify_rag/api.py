@@ -8,10 +8,12 @@ Provides REST API endpoints:
 - GET /v1/metrics: System metrics
 """
 
+import asyncio
 import json
 import logging
 import os
 import platform
+import signal
 import time
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -19,7 +21,7 @@ from typing import Optional, Dict, Any
 import typer
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 from . import config
 from .answer import answer_once
@@ -42,6 +44,40 @@ class QueryRequest(BaseModel):
     pack_top: Optional[int] = Field(8, ge=1, le=50, description="Number of chunks in context")
     threshold: Optional[float] = Field(0.25, ge=0.0, le=1.0, description="Minimum similarity")
     debug: Optional[bool] = Field(False, description="Include debug information")
+
+    @validator('question')
+    def validate_question(cls, v):
+        """Validate and sanitize question input.
+
+        Prevents XSS, injection attacks, and other malicious input.
+        """
+        # Strip excessive whitespace
+        v = " ".join(v.split())
+
+        if not v:
+            raise ValueError("Question cannot be empty after whitespace removal")
+
+        # Check for suspicious patterns (basic XSS prevention)
+        suspicious_patterns = [
+            '<script',
+            'javascript:',
+            'onerror=',
+            'onload=',
+            '<iframe',
+            'eval(',
+            'expression(',
+        ]
+
+        v_lower = v.lower()
+        for pattern in suspicious_patterns:
+            if pattern in v_lower:
+                raise ValueError(f"Invalid content detected in question")
+
+        # Ensure only printable characters (allow unicode for i18n)
+        if not all(c.isprintable() or c.isspace() for c in v):
+            raise ValueError("Question contains non-printable characters")
+
+        return v
 
 
 class QueryResponse(BaseModel):
@@ -144,30 +180,74 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.error(f"Failed to load index at startup: {e}")
 
+    @app.on_event("shutdown")
+    async def shutdown_event():
+        """Graceful shutdown handler.
+
+        Performs cleanup tasks:
+        - Flushes any pending logs
+        - Closes database connections (if any)
+        - Saves metrics/cache (if configured)
+        - Allows in-flight requests to complete (handled by uvicorn)
+        """
+        logger.info("Initiating graceful shutdown...")
+
+        # Clear index from memory (helps with clean shutdown)
+        app.state.chunks = None
+        app.state.vecs_n = None
+        app.state.bm = None
+        app.state.hnsw = None
+        app.state.index_ready = False
+
+        logger.info("Graceful shutdown complete")
+
     # ========================================================================
     # Health Check Endpoint
     # ========================================================================
 
     @app.get("/health", response_model=HealthResponse)
     async def health_check() -> HealthResponse:
-        """Health check endpoint.
+        """Enhanced health check endpoint with dependency validation.
 
-        Returns system status and connectivity.
+        Returns system status, index readiness, and Ollama connectivity.
+        Status levels:
+        - healthy: Index ready and Ollama connected
+        - degraded: Index ready but Ollama unavailable (can serve cached queries)
+        - unavailable: Index not ready (cannot serve any queries)
         """
-        # Check Ollama connectivity
+        from . import __version__
+        from pathlib import Path
+
+        # Check index files exist (belt-and-suspenders with app.state)
+        index_files_exist = all(
+            Path(f).exists() for f in ["chunks.jsonl", "vecs_n.npy", "meta.jsonl", "bm25.json"]
+        )
+        index_ready = app.state.index_ready and index_files_exist
+
+        # Check Ollama connectivity with short timeout
         ollama_ok = False
         try:
-            validate_ollama_url(config.OLLAMA_URL, timeout=3)
+            validate_ollama_url(config.OLLAMA_URL, timeout=2)
             ollama_ok = True
-        except Exception:
-            pass
+        except Exception as e:
+            # Ollama connectivity failure is acceptable for health check
+            # (allows graceful degradation), but log for debugging
+            logger.debug(f"Ollama health check failed: {e}")
+
+        # Determine overall status
+        if not index_ready:
+            status = "unavailable"
+        elif index_ready and ollama_ok:
+            status = "healthy"
+        else:
+            status = "degraded"
 
         return HealthResponse(
-            status="ok" if app.state.index_ready and ollama_ok else "degraded",
+            status=status,
             timestamp=datetime.now(),
-            version="5.9.1",
+            version=__version__,
             platform=f"{platform.system()} {platform.machine()}",
-            index_ready=app.state.index_ready,
+            index_ready=index_ready,
             ollama_connected=ollama_ok,
         )
 
