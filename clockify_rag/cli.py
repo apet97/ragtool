@@ -249,6 +249,24 @@ def setup_cli_args():
     common_flags.add_argument("--alpha", type=float, default=config.ALPHA_HYBRID,
                              help="Hybrid scoring blend: alpha*BM25 + (1-alpha)*dense (default 0.5)")
 
+    # Create parent parser for query-related flags shared by 'chat' and 'ask' subcommands
+    # FIX (v5.10): Consolidate duplicate flag definitions to single source of truth
+    query_flags = argparse.ArgumentParser(add_help=False)
+    query_flags.add_argument("--debug", action="store_true", help="Print retrieval diagnostics")
+    query_flags.add_argument("--rerank", action="store_true", help="Enable LLM-based reranking")
+    query_flags.add_argument("--topk", type=int, default=config.DEFAULT_TOP_K, help="Top-K candidates (default 15)")
+    query_flags.add_argument("--pack", type=int, default=config.DEFAULT_PACK_TOP, help="Snippets to pack (default 8)")
+    query_flags.add_argument("--threshold", type=float, default=config.DEFAULT_THRESHOLD, help="Cosine threshold (default 0.25)")
+    query_flags.add_argument("--seed", type=int, default=config.DEFAULT_SEED, help="Random seed for LLM (default 42)")
+    query_flags.add_argument("--num-ctx", type=int, default=config.DEFAULT_NUM_CTX, help=f"LLM context window (default {config.DEFAULT_NUM_CTX})")
+    query_flags.add_argument("--num-predict", type=int, default=config.DEFAULT_NUM_PREDICT, help="LLM max generation tokens (default 512)")
+    query_flags.add_argument("--retries", type=int, default=config.DEFAULT_RETRIES, help="Retries for transient errors (default 2)")
+    query_flags.add_argument("--no-expand", action="store_true",
+                             help="Disable query expansion (synonym substitution)")
+    query_flags.add_argument("--faiss-multiplier", type=int, default=config.FAISS_CANDIDATE_MULTIPLIER,
+                             help="FAISS candidate multiplier: retrieve top_k * N for reranking (default 3)")
+    query_flags.add_argument("--json", action="store_true", help="Output answer as JSON with metrics (v4.1)")
+
     ap = argparse.ArgumentParser(
         prog="clockify_support_cli",
         description="Clockify internal support chatbot (offline, stateless, closed-book)"
@@ -260,13 +278,13 @@ def setup_cli_args():
     ap.add_argument("--no-log", action="store_true",
                     help="Disable query log file writes (privacy mode)")
     ap.add_argument("--ollama-url", type=str, default=None,
-                    help="Ollama endpoint (default from config.OLLAMA_URL env or http://127.0.0.1:11434)")
+                    help="Ollama endpoint (default from OLLAMA_URL env or http://127.0.0.1:11434; for remote use set to http://your-ollama-host:11434)")
     ap.add_argument("--gen-model", type=str, default=None,
-                    help="Generation model name (default from config.GEN_MODEL env or qwen2.5:32b)")
+                    help="Generation model name (default from GEN_MODEL env or qwen2.5:32b)")
     ap.add_argument("--emb-model", type=str, default=None,
-                    help="Embedding model name (default from config.EMB_MODEL env or nomic-embed-text)")
+                    help="Embedding model name (default from EMB_MODEL env or nomic-embed-text)")
     ap.add_argument("--ctx-budget", type=int, default=None,
-                    help="Context token budget (default from CTX_BUDGET env or 6000)")
+                    help="Context token budget (default from CTX_BUDGET env or 12000)")
     ap.add_argument("--query-expansions", type=str, default=None,
                     help="Path to JSON query expansion overrides (default config/query_expansions.json or CLOCKIFY_QUERY_EXPANSIONS env)")
     # Global-only flags
@@ -280,41 +298,13 @@ def setup_cli_args():
     b.add_argument("md_path", help="Path to knowledge_full.md")
     b.add_argument("--retries", type=int, default=config.DEFAULT_RETRIES, help="Retries for transient errors (default 2)")
 
-    # Chat subparser with common flags
-    c = subparsers.add_parser("chat", help="Start REPL", parents=[common_flags])
-    c.add_argument("--debug", action="store_true", help="Print retrieval diagnostics")
-    c.add_argument("--rerank", action="store_true", help="Enable LLM-based reranking")
-    c.add_argument("--topk", type=int, default=config.DEFAULT_TOP_K, help="Top-K candidates (default 12)")
-    c.add_argument("--pack", type=int, default=config.DEFAULT_PACK_TOP, help="Snippets to pack (default 6)")
-    c.add_argument("--threshold", type=float, default=config.DEFAULT_THRESHOLD, help="Cosine threshold (default 0.30)")
-    c.add_argument("--seed", type=int, default=config.DEFAULT_SEED, help="Random seed for LLM (default 42)")
-    c.add_argument("--num-ctx", type=int, default=config.DEFAULT_NUM_CTX, help=f"LLM context window (default {config.DEFAULT_NUM_CTX})")
-    c.add_argument("--num-predict", type=int, default=config.DEFAULT_NUM_PREDICT, help="LLM max generation tokens (default 512)")
-    c.add_argument("--retries", type=int, default=config.DEFAULT_RETRIES, help="Retries for transient errors (default 2)")
+    # Chat subparser with common flags and query flags
+    c = subparsers.add_parser("chat", help="Start REPL", parents=[common_flags, query_flags])
     c.add_argument("--det-check", action="store_true", help="Determinism check: ask same Q twice, compare hashes")
-    c.add_argument("--no-expand", action="store_true",
-                   help="Disable query expansion (synonym substitution)")
-    c.add_argument("--faiss-multiplier", type=int, default=config.FAISS_CANDIDATE_MULTIPLIER,
-                   help="FAISS candidate multiplier: retrieve top_k * N for reranking (default 3)")
-    c.add_argument("--json", action="store_true", help="Output answer as JSON with metrics (v4.1)")
 
-    # Ask subparser with common flags
-    a = subparsers.add_parser("ask", help="Answer a single question and exit", parents=[common_flags])
+    # Ask subparser with common flags and query flags
+    a = subparsers.add_parser("ask", help="Answer a single question and exit", parents=[common_flags, query_flags])
     a.add_argument("question", help="Question to answer")
-    a.add_argument("--debug", action="store_true", help="Print retrieval diagnostics")
-    a.add_argument("--rerank", action="store_true", help="Enable LLM-based reranking")
-    a.add_argument("--topk", type=int, default=config.DEFAULT_TOP_K, help="Top-K candidates (default 12)")
-    a.add_argument("--pack", type=int, default=config.DEFAULT_PACK_TOP, help="Snippets to pack (default 6)")
-    a.add_argument("--threshold", type=float, default=config.DEFAULT_THRESHOLD, help="Cosine threshold (default 0.30)")
-    a.add_argument("--seed", type=int, default=config.DEFAULT_SEED, help="Random seed for LLM (default 42)")
-    a.add_argument("--num-ctx", type=int, default=config.DEFAULT_NUM_CTX, help=f"LLM context window (default {config.DEFAULT_NUM_CTX})")
-    a.add_argument("--num-predict", type=int, default=config.DEFAULT_NUM_PREDICT, help="LLM max generation tokens (default 512)")
-    a.add_argument("--retries", type=int, default=config.DEFAULT_RETRIES, help="Retries for transient errors (default 2)")
-    a.add_argument("--no-expand", action="store_true",
-                   help="Disable query expansion (synonym substitution)")
-    a.add_argument("--faiss-multiplier", type=int, default=config.FAISS_CANDIDATE_MULTIPLIER,
-                   help="FAISS candidate multiplier: retrieve top_k * N for reranking (default 3)")
-    a.add_argument("--json", action="store_true", help="Output answer as JSON with metrics (v4.1)")
 
     return ap.parse_args()
 
