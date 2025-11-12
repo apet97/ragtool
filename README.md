@@ -96,6 +96,8 @@ python3 clockify_support_cli_final.py ask "How do I track time in Clockify?" --r
 python3 clockify_support_cli_final.py --selftest
 ```
 
+The self-test command generates a synthetic index on the fly, verifies that index artifacts load correctly, and exercises a hybrid retrieval smoke test so you can validate deployments without rebuilding the full knowledge base.
+
 ## What's New in v4.1.2
 
 ### Apple Silicon M1/M2/M3 Support ✅
