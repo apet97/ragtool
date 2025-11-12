@@ -127,6 +127,20 @@ python3 -m uvicorn clockify_rag.api:app --host 0.0.0.0 --port 8000
 gunicorn -w 4 --bind 0.0.0.0:8000 clockify_rag.api:app
 ```
 
+### Rate Limiting / Throttling
+
+Every inbound question flows through a sliding-window rate limiter. Operations teams can tune it with two
+environment variables:
+
+| Variable | Description |
+| --- | --- |
+| `RATE_LIMIT_REQUESTS` | Number of requests allowed per identity within the window (default: `10`). |
+| `RATE_LIMIT_WINDOW` | Length of the sliding window in seconds (default: `60`). |
+
+Identities are derived from the CLI process (per PID) or from API credentials / client IPs. When the limit is
+exceeded, CLI users see a friendly "try again later" prompt while API callers receive HTTP 429 responses with a
+`Retry-After` hint. Setting either variable to `0` disables throttling if you have dedicated infrastructure.
+
 ## 📊 System Architecture
 
 ```

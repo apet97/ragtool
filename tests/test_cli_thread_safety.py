@@ -35,7 +35,6 @@ def test_cli_query_cache_concurrent_access():
     assert not errors, f"No thread should raise exceptions: {errors!r}"
 
 
-@pytest.mark.skip(reason="RateLimiter is now a no-op for internal deployment")
 def test_cli_rate_limiter_concurrent_access():
     """Verify the CLI's RateLimiter safely handles concurrent requests."""
 

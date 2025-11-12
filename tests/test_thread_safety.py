@@ -49,7 +49,6 @@ def test_query_cache_thread_safe():
         assert "timestamp" in metadata
 
 
-@pytest.mark.skip(reason="RateLimiter is now a no-op for internal deployment")
 def test_rate_limiter_thread_safe():
     """Verify rate limiter works correctly with concurrent access."""
     limiter = RateLimiter(max_requests=50, window_seconds=1)
@@ -116,7 +115,6 @@ def test_query_cache_concurrent_put_get():
     assert len(errors) == 0, f"No errors should occur: {errors}"
 
 
-@pytest.mark.skip(reason="RateLimiter is now a no-op for internal deployment")
 def test_rate_limiter_wait_time_thread_safe():
     """Test that wait_time calculation is thread-safe."""
     limiter = RateLimiter(max_requests=10, window_seconds=1)
@@ -176,7 +174,6 @@ def test_query_cache_stats_thread_safe():
     assert stats["size"] <= 100, f"Cache size should not exceed maxsize (100), got {stats['size']}"
 
 
-@pytest.mark.skip(reason="RateLimiter is now a no-op for internal deployment")
 def test_rate_limiter_burst_handling():
     """Test rate limiter handles burst traffic correctly."""
     limiter = RateLimiter(max_requests=20, window_seconds=0.5)

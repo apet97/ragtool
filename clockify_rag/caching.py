@@ -5,7 +5,8 @@ import logging
 import os
 import threading
 import time
-from collections import deque
+from collections import defaultdict, deque
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -15,40 +16,78 @@ _QUERY_CACHE = None
 
 
 class RateLimiter:
-    """Rate limiter DISABLED for internal deployment (no-op for backward compatibility).
+    """Sliding-window rate limiter keyed by identity."""
 
-    OPTIMIZATION: For internal use, rate limiting adds unnecessary overhead (~5-10ms per query).
-    This class is kept for API compatibility but all methods return permissive values.
-    """
+    _GLOBAL_KEY = "__global__"
 
-    def __init__(self, max_requests=10, window_seconds=60):
-        """Initialize rate limiter (no-op for internal deployment).
+    def __init__(self, max_requests: int = 10, window_seconds: float = 60.0):
+        if max_requests < 0:
+            raise ValueError("max_requests must be >= 0")
+        if window_seconds < 0:
+            raise ValueError("window_seconds must be >= 0")
 
-        Args:
-            max_requests: Ignored (kept for API compatibility)
-            window_seconds: Ignored (kept for API compatibility)
-        """
-        # No-op initialization - no state tracking for internal deployment
-        pass
+        self.max_requests = int(max_requests)
+        self.window_seconds = float(window_seconds)
+        self._time_fn = time.monotonic
+        self._lock = threading.RLock()
+        self._events = defaultdict(deque)  # identity -> deque[timestamps]
+        self._disabled = self.max_requests == 0 or self.window_seconds == 0
 
-    def allow_request(self) -> bool:
-        """Always allow requests for internal deployment.
+    def _normalized_key(self, identity: Optional[str]) -> str:
+        return identity or self._GLOBAL_KEY
 
-        Returns:
-            Always True (no rate limiting for internal use)
-        """
-        return True  # Always allow for internal deployment
+    def _prune(self, key: str, now: float) -> deque:
+        bucket = self._events.get(key)
+        if not bucket:
+            return deque()
+        cutoff = now - self.window_seconds
+        while bucket and bucket[0] <= cutoff:
+            bucket.popleft()
+        if not bucket:
+            # Drop empty buckets to prevent unbounded growth
+            self._events.pop(key, None)
+            return deque()
+        return bucket
 
-    def wait_time(self) -> float:
-        """Always return 0 for internal deployment.
+    def allow_request(self, identity: Optional[str] = None) -> bool:
+        """Return True if request is allowed for the identity."""
 
-        Returns:
-            Always 0.0 (no waiting required)
-        """
-        return 0.0  # Never wait for internal deployment
+        if self._disabled:
+            return True
+
+        now = self._time_fn()
+        key = self._normalized_key(identity)
+
+        with self._lock:
+            bucket = self._prune(key, now)
+            if len(bucket) < self.max_requests:
+                bucket.append(now)
+                self._events[key] = bucket
+                return True
+            return False
+
+    def wait_time(self, identity: Optional[str] = None) -> float:
+        """Return seconds until the next request would be allowed."""
+
+        if self._disabled:
+            return 0.0
+
+        now = self._time_fn()
+        key = self._normalized_key(identity)
+
+        with self._lock:
+            bucket = self._prune(key, now)
+            if len(bucket) < self.max_requests:
+                return 0.0
+            oldest = bucket[0]
+            retry_after = (oldest + self.window_seconds) - now
+            return max(0.0, retry_after)
 
 
 # Global rate limiter (10 queries per minute by default)
+_RATE_LIMITER_LOCK = threading.Lock()
+
+
 def get_rate_limiter():
     """Get global rate limiter instance.
 
@@ -56,10 +95,12 @@ def get_rate_limiter():
     """
     global _RATE_LIMITER
     if _RATE_LIMITER is None:
-        _RATE_LIMITER = RateLimiter(
-            max_requests=int(os.environ.get("RATE_LIMIT_REQUESTS", "10")),
-            window_seconds=int(os.environ.get("RATE_LIMIT_WINDOW", "60"))
-        )
+        with _RATE_LIMITER_LOCK:
+            if _RATE_LIMITER is None:
+                _RATE_LIMITER = RateLimiter(
+                    max_requests=int(os.environ.get("RATE_LIMIT_REQUESTS", "10")),
+                    window_seconds=float(os.environ.get("RATE_LIMIT_WINDOW", "60")),
+                )
     return _RATE_LIMITER
 
 

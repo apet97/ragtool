@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, validator
 
 from . import config
 from .answer import answer_once
+from .caching import get_rate_limiter
 from .cli import ensure_index_ready
 from .indexing import build
 from .utils import check_ollama_connectivity
@@ -378,7 +379,8 @@ def create_app() -> FastAPI:
     @app.post("/v1/query", response_model=QueryResponse)
     async def submit_query(
         request: QueryRequest,
-        _: Dict[str, Any] = Depends(validate_request_credentials),
+        raw_request: Request,
+        credentials: Dict[str, Any] = Depends(validate_request_credentials),
     ) -> QueryResponse:
         """Submit a question and get an answer.
 
@@ -398,6 +400,16 @@ def create_app() -> FastAPI:
             raise HTTPException(
                 status_code=503, detail="Index not ready. Run /v1/ingest first or wait for startup."
             )
+
+        limiter = get_rate_limiter()
+        principal = credentials.get("principal") if isinstance(credentials, dict) else None
+        client_host = raw_request.client.host if raw_request.client else None
+        limiter_identity = principal or client_host or "api-anonymous"
+
+        if not limiter.allow_request(limiter_identity):
+            wait_seconds = limiter.wait_time(limiter_identity)
+            detail = f"Rate limit exceeded. Retry after {wait_seconds:.0f} seconds."
+            raise HTTPException(status_code=429, detail=detail)
 
         try:
             start_time = time.time()

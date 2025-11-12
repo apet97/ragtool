@@ -10,7 +10,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from clockify_rag.caching import RateLimiter
 
 
-@pytest.mark.skip(reason="RateLimiter is now a no-op for internal deployment (optimization). Tests expect actual rate limiting but implementation always allows requests.")
 class TestRateLimiter:
     """Test rate limiter logic."""
 
@@ -119,6 +118,16 @@ class TestRateLimiter:
 
         # Should have allowed exactly 5
         assert allowed_count == 5
+
+    def test_rate_limiter_identity_isolation(self):
+        """Requests are tracked independently per identity."""
+        limiter = RateLimiter(max_requests=1, window_seconds=5)
+        assert limiter.allow_request("alpha") is True
+        assert limiter.allow_request("beta") is True
+        assert limiter.allow_request("alpha") is False
+        assert limiter.allow_request("beta") is False
+        time.sleep(5.1)
+        assert limiter.allow_request("alpha") is True
 
 
 if __name__ == "__main__":

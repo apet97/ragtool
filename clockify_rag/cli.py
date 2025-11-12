@@ -17,7 +17,7 @@ from . import config
 from .indexing import build, load_index
 from .utils import _log_config_summary, validate_and_set_config, validate_chunk_config, check_pytorch_mps
 from .answer import answer_once, answer_to_json
-from .caching import get_query_cache
+from .caching import get_query_cache, get_rate_limiter
 from .retrieval import set_query_expansion_path, load_query_expansion_dict, QUERY_EXPANSIONS_ENV_VAR
 from .http_utils import http_post_with_retries
 from .precomputed_cache import get_precomputed_cache
@@ -110,6 +110,9 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
 
     debug_enabled = debug  # Local toggle
 
+    limiter = get_rate_limiter()
+    limiter_identity = f"cli-repl:{os.getpid()}"
+
     while True:
         try:
             question = input("\n> ").strip()
@@ -126,6 +129,12 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
         if question == ":debug":
             debug_enabled = not debug_enabled
             print(f"Debug mode: {'ON' if debug_enabled else 'OFF'}")
+            continue
+
+        if not limiter.allow_request(limiter_identity):
+            wait_seconds = limiter.wait_time(limiter_identity)
+            wait_msg = f"Please wait {wait_seconds:.0f}s and try again."
+            print(f"⚠️  Too many questions at once. {wait_msg}")
             continue
 
         # OPTIMIZATION (Analysis Section 9.1 #3): Check FAQ cache first for instant responses
@@ -395,6 +404,15 @@ def handle_ask_command(args):
         num_predict=args.num_predict,
         retries=getattr(args, "retries", 0)
     )
+    limiter = get_rate_limiter()
+    limiter_identity = f"cli-ask:{os.getpid()}"
+
+    if not limiter.allow_request(limiter_identity):
+        wait_seconds = limiter.wait_time(limiter_identity)
+        wait_msg = f"Please wait {wait_seconds:.0f}s and try again."
+        print(f"⚠️  Request throttled. {wait_msg}")
+        return
+
     chunks, vecs_n, bm, hnsw = ensure_index_ready(retries=getattr(args, "retries", 0))
     result = answer_once(
         args.question,

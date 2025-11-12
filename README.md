@@ -514,6 +514,12 @@ RATE_LIMIT_REQUESTS     # Max requests per window (default: 10)
 RATE_LIMIT_WINDOW       # Window in seconds (default: 60)
 ```
 
+The rate limiter enforces a sliding window per caller identity (CLI process, API key, or client IP).
+Set `RATE_LIMIT_REQUESTS=0` or `RATE_LIMIT_WINDOW=0` to disable throttling entirely for trusted environments.
+When the limit is hit, the CLI prints a friendly "please try again" message and the API returns HTTP 429 with a
+`Retry-After` style hint derived from the remaining window. Tune the values per environment to keep Ollama/LLM
+capacity from being overwhelmed.
+
 ### Query Expansion
 ```bash
 CLOCKIFY_QUERY_EXPANSIONS   # Path to custom query_expansions.json
