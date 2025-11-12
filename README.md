@@ -192,7 +192,7 @@ python3 clockify_support_cli_final.py --selftest
 
 ### Security 🔒
 - `allow_redirects=False` prevents auth header leaks
-- `trust_env=False` by default (set `USE_PROXY=1` to enable)
+- `trust_env=False` by default (set `ALLOW_PROXIES=1` or legacy `USE_PROXY=1` to enable)
 - All POST calls use explicit (connect, read) timeouts
 - Policy guardrails for sensitive queries
 
@@ -271,7 +271,7 @@ python3 clockify_support_cli.py chat \
 
 ### With Proxy
 ```bash
-USE_PROXY=1 python3 clockify_support_cli.py chat
+ALLOW_PROXIES=1 python3 clockify_support_cli.py chat  # USE_PROXY=1 also works
 ```
 
 ## Testing

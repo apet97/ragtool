@@ -118,16 +118,18 @@ EMB_MODEL = os.environ.get("EMB_MODEL", "nomic-embed-text")   # ✅ Perfect matc
 
 ### 3. Network & VPN Handling ✅ PASS
 
-**File**: `clockify_rag/http_utils.py:78, 93`
+**File**: `clockify_rag/http_utils.py`
 
 ```python
-session.trust_env = (os.getenv("ALLOW_PROXIES") == "1")
+from .utils import proxies_allowed
+
+session.trust_env = proxies_allowed()
 ```
 
 **Analysis**:
 - ✅ **Proxies disabled by default** (`trust_env=False`)
 - ✅ **VPN-safe** - Won't leak credentials through system proxies
-- ✅ **Configurable** - Set `ALLOW_PROXIES=1` if company requires HTTP proxy
+- ✅ **Configurable** - Set `ALLOW_PROXIES=1` (or legacy `USE_PROXY=1`) if company requires HTTP proxy
 
 **HTTP Session Features**:
 - ✅ **Connection pooling** - `pool_maxsize=20` for concurrent requests
@@ -140,7 +142,7 @@ session.trust_env = (os.getenv("ALLOW_PROXIES") == "1")
 | Scenario | Configuration | Command |
 |----------|---------------|---------|
 | **VPN to company network** | `export OLLAMA_URL="http://10.127.0.192:11434"` | Default (no proxy) |
-| **VPN requires HTTP proxy** | `export ALLOW_PROXIES=1`<br>`export http_proxy="http://proxy:8080"` | Enable trust_env |
+| **VPN requires HTTP proxy** | `export ALLOW_PROXIES=1` *(or `USE_PROXY=1`)*<br>`export http_proxy="http://proxy:8080"` | Enable trust_env |
 | **Direct connection (no VPN)** | Won't work - 10.127.0.192 is private IP | Connect VPN first |
 
 ---

@@ -2,13 +2,13 @@
 
 import atexit
 import logging
-import os
 import threading
 import weakref
 
 import requests
 
 from .config import EMB_CONNECT_T, EMB_READ_T
+from .utils import proxies_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -122,11 +122,12 @@ def get_session(retries=0, use_thread_local=True) -> requests.Session:
         # Thread-local session for safe parallel usage
         if not hasattr(_thread_local, 'session'):
             _thread_local.session = requests.Session()
-            _thread_local.session.trust_env = (os.getenv("ALLOW_PROXIES") == "1")
             _thread_local.retries = 0
             # FIX (Error #3): Register session for cleanup
             _sessions_registry.add(_thread_local.session)
             logger.debug("Created new thread-local session (registered for cleanup)")
+
+        _thread_local.session.trust_env = proxies_allowed()
 
         # Upgrade retries if higher count requested
         if retries > _thread_local.retries:
@@ -139,8 +140,6 @@ def get_session(retries=0, use_thread_local=True) -> requests.Session:
         global REQUESTS_SESSION, REQUESTS_SESSION_RETRIES
         if REQUESTS_SESSION is None:
             REQUESTS_SESSION = requests.Session()
-            # Set trust_env based on ALLOW_PROXIES env var
-            REQUESTS_SESSION.trust_env = (os.getenv("ALLOW_PROXIES") == "1")
             # FIX (Error #3): Register global session for cleanup
             _sessions_registry.add(REQUESTS_SESSION)
             if retries > 0:
@@ -150,6 +149,8 @@ def get_session(retries=0, use_thread_local=True) -> requests.Session:
             # Upgrade retries if higher count requested
             _mount_retries(REQUESTS_SESSION, retries)
             REQUESTS_SESSION_RETRIES = retries
+
+        REQUESTS_SESSION.trust_env = proxies_allowed()
         return REQUESTS_SESSION
 
 

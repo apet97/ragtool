@@ -20,6 +20,31 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+_PROXY_TRUST_ENV_VARS = ("ALLOW_PROXIES", "USE_PROXY")
+
+
+def proxies_allowed() -> bool:
+    """Return True if proxy trust should be enabled based on env vars.
+
+    Supports both the modern ``ALLOW_PROXIES`` flag and the legacy
+    ``USE_PROXY`` name. Values like ``1``, ``true``, ``yes``, and ``on`` are
+    treated as truthy. Any other explicit value disables proxy trust. If no
+    environment variables are set, proxy trust remains disabled by default.
+    """
+
+    for key in _PROXY_TRUST_ENV_VARS:
+        raw_value = os.getenv(key)
+        if raw_value is None:
+            continue
+
+        normalized = raw_value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+
+    return False
+
 
 # ====== INPUT SANITIZATION ======
 def sanitize_for_log(text: str, max_length: int = 1000) -> str:
@@ -306,7 +331,7 @@ def _log_config_summary(use_rerank=False, pack_top=None, seed=None, threshold=No
     else:
         logger.info(f"PLATFORM platform={sys_platform} arch={sys_arch}")
 
-    proxy_trust = 1 if os.getenv("ALLOW_PROXIES") == "1" else 0
+    proxy_trust = 1 if proxies_allowed() else 0
     # Single-line CONFIG banner
     logger.info(
         f"CONFIG model={GEN_MODEL} emb={EMB_MODEL} topk={top_k} pack={pack_top} thr={threshold} "
