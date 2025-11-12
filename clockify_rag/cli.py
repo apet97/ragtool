@@ -205,7 +205,7 @@ def warmup_on_startup():
     # Warm-up embedding (Rank 3: 50-100ms saved on first query)
     try:
         from .embedding import embed_texts
-        embed_texts(["warmup query"], suppress_errors=True)
+        embed_texts(["warmup query"])
     except Exception as e:
         logger.warning(f"Embedding warmup failed: {e}")
 
