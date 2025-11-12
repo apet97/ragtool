@@ -1,7 +1,10 @@
 import asyncio
 
+import asyncio
+
 import pytest
-from httpx import AsyncClient
+import httpx
+from asgi_lifespan import LifespanManager
 
 import clockify_rag.api as api_module
 
@@ -53,32 +56,34 @@ async def test_ingest_then_query_succeeds(tmp_path, monkeypatch):
 
     app = api_module.create_app()
 
-    async with AsyncClient(app=app, base_url="http://testserver") as client:
-        ingest_response = await client.post(
-            "/v1/ingest", json={"input_file": str(kb_path)}
-        )
+    async with LifespanManager(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            ingest_response = await client.post(
+                "/v1/ingest", json={"input_file": str(kb_path)}
+            )
 
-        assert ingest_response.status_code == 200
-        assert build_calls == {"path": str(kb_path), "retries": 2}
-        assert ensure_stub.calls.count(2) >= 2  # Startup + ingest
+            assert ingest_response.status_code == 200
+            assert build_calls == {"path": str(kb_path), "retries": 2}
+            assert ensure_stub.calls.count(2) >= 2  # Startup + ingest
 
-        # Wait for the background task to finalize state assignment
-        for _ in range(20):
-            if app.state.index_ready:
-                break
-            await asyncio.sleep(0.01)
+            # Wait for the background task to finalize state assignment
+            for _ in range(20):
+                if app.state.index_ready:
+                    break
+                await asyncio.sleep(0.01)
 
-        assert app.state.index_ready is True
+            assert app.state.index_ready is True
 
-        query_response = await client.post(
-            "/v1/query", json={"question": "How do I use this?"}
-        )
+            query_response = await client.post(
+                "/v1/query", json={"question": "How do I use this?"}
+            )
 
-        assert query_response.status_code == 200
-        assert query_response.json()["answer"] == "ready"
-        assert recorded_answer_inputs["chunks"] == ensure_stub.default_return[0]
-        assert recorded_answer_inputs["vecs_n"] == ensure_stub.default_return[1]
-        assert recorded_answer_inputs["bm"] == ensure_stub.default_return[2]
+            assert query_response.status_code == 200
+            assert query_response.json()["answer"] == "ready"
+            assert recorded_answer_inputs["chunks"] == ensure_stub.default_return[0]
+            assert recorded_answer_inputs["vecs_n"] == ensure_stub.default_return[1]
+            assert recorded_answer_inputs["bm"] == ensure_stub.default_return[2]
 
 
 @pytest.mark.asyncio
@@ -109,29 +114,31 @@ async def test_ingest_failure_clears_cached_state(tmp_path, monkeypatch):
     app.state.hnsw = "stale"
     app.state.index_ready = True
 
-    async with AsyncClient(app=app, base_url="http://testserver") as client:
-        ingest_response = await client.post(
-            "/v1/ingest", json={"input_file": str(kb_path)}
-        )
+    async with LifespanManager(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            ingest_response = await client.post(
+                "/v1/ingest", json={"input_file": str(kb_path)}
+            )
 
-        assert ingest_response.status_code == 200
-        assert build_calls["count"] == 1
+            assert ingest_response.status_code == 200
+            assert build_calls["count"] == 1
 
-        # Wait for the background task to clear cached state
-        for _ in range(20):
-            if (
-                app.state.index_ready is False
-                and app.state.chunks is None
-                and app.state.vecs_n is None
-                and app.state.bm is None
-                and app.state.hnsw is None
-            ):
-                break
-            await asyncio.sleep(0.01)
+            # Wait for the background task to clear cached state
+            for _ in range(20):
+                if (
+                    app.state.index_ready is False
+                    and app.state.chunks is None
+                    and app.state.vecs_n is None
+                    and app.state.bm is None
+                    and app.state.hnsw is None
+                ):
+                    break
+                await asyncio.sleep(0.01)
 
-        assert app.state.index_ready is False
-        assert app.state.chunks is None
-        assert app.state.vecs_n is None
-        assert app.state.bm is None
-        assert app.state.hnsw is None
+            assert app.state.index_ready is False
+            assert app.state.chunks is None
+            assert app.state.vecs_n is None
+            assert app.state.bm is None
+            assert app.state.hnsw is None
 

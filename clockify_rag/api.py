@@ -14,6 +14,7 @@ import logging
 import os
 import platform
 import signal
+import threading
 import time
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -21,6 +22,7 @@ from typing import Optional, Dict, Any, List
 import typer
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, validator
 
 from . import config
@@ -258,6 +260,7 @@ def create_app() -> FastAPI:
     app.state.bm = None
     app.state.hnsw = None
     app.state.index_ready = False
+    app.state.index_lock = threading.RLock()
 
     @app.on_event("startup")
     async def startup_event():
@@ -267,11 +270,12 @@ def create_app() -> FastAPI:
             result = ensure_index_ready(retries=2)
             if result:
                 chunks, vecs_n, bm, hnsw = result
-                app.state.chunks = chunks
-                app.state.vecs_n = vecs_n
-                app.state.bm = bm
-                app.state.hnsw = hnsw
-                app.state.index_ready = True
+                with app.state.index_lock:
+                    app.state.chunks = chunks
+                    app.state.vecs_n = vecs_n
+                    app.state.bm = bm
+                    app.state.hnsw = hnsw
+                    app.state.index_ready = True
                 logger.info(f"Index loaded: {len(chunks)} chunks")
             else:
                 logger.warning("Index not ready at startup")
@@ -291,11 +295,12 @@ def create_app() -> FastAPI:
         logger.info("Initiating graceful shutdown...")
 
         # Clear index from memory (helps with clean shutdown)
-        app.state.chunks = None
-        app.state.vecs_n = None
-        app.state.bm = None
-        app.state.hnsw = None
-        app.state.index_ready = False
+        with app.state.index_lock:
+            app.state.chunks = None
+            app.state.vecs_n = None
+            app.state.bm = None
+            app.state.hnsw = None
+            app.state.index_ready = False
 
         logger.info("Graceful shutdown complete")
 
@@ -320,7 +325,9 @@ def create_app() -> FastAPI:
         index_files_exist = all(
             Path(f).exists() for f in ["chunks.jsonl", "vecs_n.npy", "meta.jsonl", "bm25.json"]
         )
-        index_ready = app.state.index_ready and index_files_exist
+        with app.state.index_lock:
+            index_ready = app.state.index_ready
+        index_ready = index_ready and index_files_exist
 
         # Check Ollama connectivity with short timeout
         ollama_ok = False
@@ -394,7 +401,14 @@ def create_app() -> FastAPI:
         Raises:
             HTTPException: If index not ready or query fails
         """
-        if not app.state.index_ready:
+        with app.state.index_lock:
+            index_ready = app.state.index_ready
+            chunks = app.state.chunks
+            vecs_n = app.state.vecs_n
+            bm = app.state.bm
+            hnsw = app.state.hnsw
+
+        if not index_ready:
             raise HTTPException(
                 status_code=503, detail="Index not ready. Run /v1/ingest first or wait for startup."
             )
@@ -402,15 +416,16 @@ def create_app() -> FastAPI:
         try:
             start_time = time.time()
 
-            result = answer_once(
+            result = await run_in_threadpool(
+                answer_once,
                 request.question,
-                app.state.chunks,
-                app.state.vecs_n,
-                app.state.bm,
+                chunks,
+                vecs_n,
+                bm,
                 top_k=request.top_k,
                 pack_top=request.pack_top,
                 threshold=request.threshold,
-                hnsw=app.state.hnsw,
+                hnsw=hnsw,
             )
 
             elapsed_ms = (time.time() - start_time) * 1000
@@ -470,27 +485,32 @@ def create_app() -> FastAPI:
                     raise RuntimeError("Index artifacts missing after build")
 
                 chunks, vecs_n, bm, hnsw = result
-                app.state.chunks = chunks
-                app.state.vecs_n = vecs_n
-                app.state.bm = bm
-                app.state.hnsw = hnsw
-                app.state.index_ready = True
+                with app.state.index_lock:
+                    app.state.chunks = chunks
+                    app.state.vecs_n = vecs_n
+                    app.state.bm = bm
+                    app.state.hnsw = hnsw
+                    app.state.index_ready = True
                 logger.info("Ingest completed successfully")
             except Exception as e:
                 logger.error(f"Ingest failed: {e}", exc_info=True)
-                app.state.chunks = None
-                app.state.vecs_n = None
-                app.state.bm = None
-                app.state.hnsw = None
-                app.state.index_ready = False
+                with app.state.index_lock:
+                    app.state.chunks = None
+                    app.state.vecs_n = None
+                    app.state.bm = None
+                    app.state.hnsw = None
+                    app.state.index_ready = False
 
         background_tasks.add_task(do_ingest)
+
+        with app.state.index_lock:
+            index_ready = app.state.index_ready
 
         return IngestResponse(
             status="processing",
             message=f"Index build started in background from {input_file}",
             timestamp=datetime.now(),
-            index_ready=app.state.index_ready,
+            index_ready=index_ready,
         )
 
     # ========================================================================
@@ -506,10 +526,14 @@ def create_app() -> FastAPI:
         Returns:
             Dictionary with metrics (JSON for easy parsing)
         """
+        with app.state.index_lock:
+            chunks = app.state.chunks
+            index_ready = app.state.index_ready
+
         return {
             "timestamp": datetime.now().isoformat(),
-            "index_ready": app.state.index_ready,
-            "chunks_loaded": len(app.state.chunks) if app.state.chunks else 0,
+            "index_ready": index_ready,
+            "chunks_loaded": len(chunks) if chunks else 0,
         }
 
     return app

@@ -219,6 +219,7 @@ addopts = "-v --tb=short --strict-markers"
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "asyncio: async tests using event loop",
 ]
 
 [tool.coverage.run]
