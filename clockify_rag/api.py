@@ -28,6 +28,7 @@ from .answer import answer_once
 from .cli import ensure_index_ready
 from .indexing import build
 from .utils import check_ollama_connectivity
+from .exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -426,6 +427,9 @@ def create_app() -> FastAPI:
                 processing_time_ms=elapsed_ms,
             )
 
+        except ValidationError as exc:
+            logger.info("Validation error: %s", exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as e:
             logger.error(f"Query error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Query processing failed: {str(e)}")
