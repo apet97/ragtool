@@ -134,19 +134,29 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
             faq_result = faq_cache.get(question, fuzzy=True)
 
         if faq_result:
-            # FAQ cache hit - instant response (0.1ms)
-            answer = faq_result["answer"]
-            meta = {
+            # FAQ cache hit - synthesize result compatible with answer_once output
+            cached_chunks = faq_result.get("packed_chunks", [])
+            result = {
+                "answer": faq_result["answer"],
+                "refused": False,
                 "confidence": faq_result.get("confidence"),
-                "selected": faq_result.get("packed_chunks", []),
-                "used_tokens": 0,
-                "cache_type": "faq_precomputed"
+                "selected_chunks": cached_chunks,
+                "packed_chunks": cached_chunks,
+                "context_block": "",
+                "timing": {},
+                "metadata": {
+                    "used_tokens": 0,
+                    "retrieval_count": len(cached_chunks),
+                    "packed_count": len(cached_chunks),
+                    "cache_type": "faq_precomputed",
+                },
+                "routing": faq_result.get("routing"),
             }
             if debug_enabled:
                 print("[DEBUG] FAQ cache hit (precomputed answer)")
         else:
             # FAQ cache miss - normal retrieval
-            answer, meta = answer_once(
+            result = answer_once(
                 question,
                 chunks,
                 vecs_n,
@@ -155,7 +165,6 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
                 pack_top=pack_top,
                 threshold=threshold,
                 use_rerank=use_rerank,
-                debug=debug_enabled,
                 hnsw=hnsw,
                 seed=seed,
                 num_ctx=num_ctx,
@@ -163,27 +172,32 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
                 retries=retries
             )
 
+        answer_text = result.get("answer", "")
+        citations = result.get("selected_chunks", [])
+        metadata = result.get("metadata", {}) or {}
+
         if use_json:
             # v4.1: JSON output mode
-            used_tokens = meta.get("used_tokens")
+            used_tokens = metadata.get("used_tokens")
             if used_tokens is None:
-                used_tokens = len(meta.get("selected", []))
+                used_tokens = len(citations)
             output = {
-                "answer": answer,
-                "citations": meta.get("selected", []),
+                "answer": answer_text,
+                "citations": citations,
                 "used_tokens": used_tokens,
                 "topk": top_k,
-                "packed": len(meta.get("selected", [])),
-                "confidence": meta.get("confidence")
+                "packed": len(citations),
+                "confidence": result.get("confidence"),
             }
             print(json.dumps(output, ensure_ascii=False, indent=2))
         else:
-            print(f"\n{answer}")
+            print(f"\n{answer_text}")
 
         # Show debug info if enabled
-        if debug_enabled and "selected" in meta:
-            print(f"\n[DEBUG] Retrieved: {len(meta.get('selected', []))} chunks")
-            print(f"[DEBUG] Scores: {meta.get('scores', [])[:5]}")
+        if debug_enabled:
+            print(f"\n[DEBUG] Retrieved: {len(citations)} chunks")
+            if metadata:
+                print(f"[DEBUG] Metadata: {metadata}")
 
     # Save cache on exit
     query_cache.save()
@@ -382,7 +396,7 @@ def handle_ask_command(args):
         retries=getattr(args, "retries", 0)
     )
     chunks, vecs_n, bm, hnsw = ensure_index_ready(retries=getattr(args, "retries", 0))
-    ans, meta = answer_once(
+    result = answer_once(
         args.question,
         chunks,
         vecs_n,
@@ -391,28 +405,36 @@ def handle_ask_command(args):
         pack_top=args.pack,
         threshold=args.threshold,
         use_rerank=args.rerank,
-        debug=args.debug,
         hnsw=hnsw,
         seed=args.seed,
         num_ctx=args.num_ctx,
         num_predict=args.num_predict,
         retries=getattr(args, "retries", 0)
     )
+    answer_text = result.get("answer", "")
+    citations = result.get("selected_chunks", [])
+    metadata = result.get("metadata", {}) or {}
+
     if getattr(args, "json", False):
-        used_tokens = meta.get("used_tokens")
+        used_tokens = metadata.get("used_tokens")
         if used_tokens is None:
-            used_tokens = len(meta.get("selected", []))
+            used_tokens = len(citations)
         output = answer_to_json(
-            ans,
-            meta.get("selected", []),
+            answer_text,
+            citations,
             used_tokens,
             args.topk,
             args.pack,
-            meta.get("confidence")
+            result.get("confidence")
         )
         print(json.dumps(output, ensure_ascii=False, indent=2))
     else:
-        print(ans)
+        print(answer_text)
+
+    if getattr(args, "debug", False):
+        print(f"[DEBUG] Retrieved: {len(citations)} chunks")
+        if metadata:
+            print(f"[DEBUG] Metadata: {metadata}")
 
 
 def handle_chat_command(args):

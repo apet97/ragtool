@@ -344,7 +344,7 @@ def query(
     try:
         chunks, vecs_n, bm, hnsw = ensure_index_ready(retries=2)
 
-        answer, meta = answer_once(
+        result = answer_once(
             question,
             chunks,
             vecs_n,
@@ -353,24 +353,30 @@ def query(
             pack_top=pack_top,
             threshold=threshold,
             hnsw=hnsw,
-            debug=debug,
         )
+
+        answer_text = result.get("answer", "")
+        selected_chunks = result.get("selected_chunks", [])
+        metadata = result.get("metadata", {}) or {}
 
         if json_output:
             output = {
                 "question": question,
-                "answer": answer,
-                "confidence": meta.get("confidence"),
-                "sources": meta.get("selected", []),
-                "num_sources": len(meta.get("selected", [])),
+                "answer": answer_text,
+                "confidence": result.get("confidence"),
+                "sources": selected_chunks,
+                "num_sources": len(selected_chunks),
+                "metadata": metadata,
             }
             console.print(json.dumps(output, indent=2, ensure_ascii=False))
         else:
             console.print()
-            console.print(answer)
-            if debug and meta.get("selected"):
+            console.print(answer_text)
+            if debug and selected_chunks:
                 console.print()
-                console.print(f"[dim]Sources: {meta.get('selected')[:3]}...[/dim]")
+                console.print(f"[dim]Sources: {selected_chunks[:3]}...[/dim]")
+                if metadata:
+                    console.print(f"[dim]Metadata: {metadata}[/dim]")
 
     except Exception as e:
         console.print(f"❌ Error: {e}")
