@@ -1,6 +1,8 @@
+import pytest
 from fastapi.testclient import TestClient
 
 import clockify_rag.api as api_module
+from clockify_rag.exceptions import ValidationError
 
 
 def test_api_query_returns_metadata(monkeypatch):
@@ -33,3 +35,33 @@ def test_api_query_returns_metadata(monkeypatch):
         assert payload["sources"] == result_payload["selected_chunks"][:5]
         assert payload["metadata"]["used_tokens"] == result_payload["metadata"]["used_tokens"]
         assert payload["routing"] == result_payload["routing"]
+
+
+@pytest.mark.parametrize(
+    "question,message",
+    [
+        ("bad-empty", "Query cannot be empty"),
+        (
+            "bad-long",
+            "Query too long (12001 chars). Maximum allowed: 12000 chars. Set MAX_QUERY_LENGTH env var to override.",
+        ),
+    ],
+)
+def test_api_query_validation_errors(monkeypatch, question, message):
+    """API should convert validation errors into 400 responses."""
+
+    monkeypatch.setattr(api_module, "ensure_index_ready", lambda retries=2: ([], [], {}, None))
+
+    def fake_answer(q, *_args, **_kwargs):
+        assert q == question
+        raise ValidationError(message)
+
+    monkeypatch.setattr(api_module, "answer_once", fake_answer)
+
+    app = api_module.create_app()
+
+    with TestClient(app) as client:
+        response = client.post("/v1/query", json={"question": question})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == message

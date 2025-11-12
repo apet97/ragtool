@@ -21,6 +21,7 @@ from .caching import get_query_cache
 from .retrieval import set_query_expansion_path, load_query_expansion_dict, QUERY_EXPANSIONS_ENV_VAR
 from .http_utils import http_post_with_retries
 from .precomputed_cache import get_precomputed_cache
+from .exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -156,21 +157,25 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
                 print("[DEBUG] FAQ cache hit (precomputed answer)")
         else:
             # FAQ cache miss - normal retrieval
-            result = answer_once(
-                question,
-                chunks,
-                vecs_n,
-                bm,
-                top_k=top_k,
-                pack_top=pack_top,
-                threshold=threshold,
-                use_rerank=use_rerank,
-                hnsw=hnsw,
-                seed=seed,
-                num_ctx=num_ctx,
-                num_predict=num_predict,
-                retries=retries
-            )
+            try:
+                result = answer_once(
+                    question,
+                    chunks,
+                    vecs_n,
+                    bm,
+                    top_k=top_k,
+                    pack_top=pack_top,
+                    threshold=threshold,
+                    use_rerank=use_rerank,
+                    hnsw=hnsw,
+                    seed=seed,
+                    num_ctx=num_ctx,
+                    num_predict=num_predict,
+                    retries=retries
+                )
+            except ValidationError as exc:
+                print(f"Validation error: {exc}")
+                continue
 
         answer_text = result.get("answer", "")
         citations = result.get("selected_chunks", [])
@@ -396,21 +401,25 @@ def handle_ask_command(args):
         retries=getattr(args, "retries", 0)
     )
     chunks, vecs_n, bm, hnsw = ensure_index_ready(retries=getattr(args, "retries", 0))
-    result = answer_once(
-        args.question,
-        chunks,
-        vecs_n,
-        bm,
-        top_k=args.topk,
-        pack_top=args.pack,
-        threshold=args.threshold,
-        use_rerank=args.rerank,
-        hnsw=hnsw,
-        seed=args.seed,
-        num_ctx=args.num_ctx,
-        num_predict=args.num_predict,
-        retries=getattr(args, "retries", 0)
-    )
+    try:
+        result = answer_once(
+            args.question,
+            chunks,
+            vecs_n,
+            bm,
+            top_k=args.topk,
+            pack_top=args.pack,
+            threshold=args.threshold,
+            use_rerank=args.rerank,
+            hnsw=hnsw,
+            seed=args.seed,
+            num_ctx=args.num_ctx,
+            num_predict=args.num_predict,
+            retries=getattr(args, "retries", 0)
+        )
+    except ValidationError as exc:
+        print(f"Validation error: {exc}")
+        return
     answer_text = result.get("answer", "")
     citations = result.get("selected_chunks", [])
     metadata = result.get("metadata", {}) or {}
