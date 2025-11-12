@@ -457,20 +457,62 @@ def handle_chat_command(args):
                 prompt = "What is Clockify?"
                 payload = {"model": config.GEN_MODEL, "prompt": prompt, "options": {"seed": seed}}
 
-                r1 = http_post_with_retries(f"{config.OLLAMA_URL}/api/generate", payload,
-                                            retries=2, timeout=(config.CHAT_CONNECT_T, config.CHAT_READ_T))
-                ans1 = r1.json().get("response", "")
+                r1 = http_post_with_retries(
+                    f"{config.OLLAMA_URL}/api/generate",
+                    payload,
+                    retries=2,
+                    timeout=(config.CHAT_CONNECT_T, config.CHAT_READ_T),
+                )
 
                 np.random.seed(seed)
-                r2 = http_post_with_retries(f"{config.OLLAMA_URL}/api/generate", payload,
-                                            retries=2, timeout=(config.CHAT_CONNECT_T, config.CHAT_READ_T))
-                ans2 = r2.json().get("response", "")
+                r2 = http_post_with_retries(
+                    f"{config.OLLAMA_URL}/api/generate",
+                    payload,
+                    retries=2,
+                    timeout=(config.CHAT_CONNECT_T, config.CHAT_READ_T),
+                )
 
+                extracted = []
+                missing_details = []
+                for label, resp in (("run1", r1), ("run2", r2)):
+                    if not isinstance(resp, dict):
+                        missing_details.append(f"{label}: expected dict, got {type(resp).__name__}")
+                        extracted.append("")
+                        continue
+                    if "response" not in resp:
+                        missing_details.append(
+                            f"{label}: 'response' key missing (keys={sorted(resp.keys())})"
+                        )
+                        extracted.append("")
+                        continue
+                    value = resp["response"]
+                    if not isinstance(value, str):
+                        missing_details.append(
+                            f"{label}: 'response' must be string (got {type(value).__name__})"
+                        )
+                        extracted.append("")
+                        continue
+                    extracted.append(value)
+
+                if missing_details:
+                    detail_msg = "; ".join(missing_details)
+                    logger.error(f"[DETERMINISM] Invalid responses: {detail_msg}")
+                    print(f"[DETERMINISM] invalid responses: {detail_msg}")
+                    sys.exit(1)
+
+                ans1, ans2 = extracted
                 h1 = hashlib.md5(ans1.encode()).hexdigest()[:16]
                 h2 = hashlib.md5(ans2.encode()).hexdigest()[:16]
                 deterministic = (h1 == h2)
                 logger.info(f"[DETERMINISM] run1={h1} run2={h2} deterministic={deterministic}")
-                print(f'[DETERMINISM] run1={h1} run2={h2} deterministic={"true" if deterministic else "false"}')
+                status = "true" if deterministic else "false"
+                print(f"[DETERMINISM] run1={h1} run2={h2} deterministic={status}")
+                if not deterministic:
+                    mismatch_msg = (
+                        f"[DETERMINISM] hash mismatch: run1_len={len(ans1)} run2_len={len(ans2)}"
+                    )
+                    logger.warning(mismatch_msg)
+                    print(mismatch_msg)
                 sys.exit(0 if deterministic else 1)
             except Exception as e:
                 logger.error(f"❌ Determinism test failed: {e}")
