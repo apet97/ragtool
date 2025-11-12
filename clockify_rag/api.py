@@ -16,7 +16,7 @@ import platform
 import signal
 import time
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 import typer
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -86,7 +86,9 @@ class QueryResponse(BaseModel):
     question: str
     answer: str
     confidence: Optional[float] = None
-    sources: list[int] = Field(default_factory=list, description="Chunk IDs used")
+    sources: List[int] = Field(default_factory=list, description="Chunk IDs used")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata from answer pipeline")
+    routing: Optional[Dict[str, Any]] = Field(default=None, description="Routing recommendation metadata")
     timestamp: datetime
     processing_time_ms: float
 
@@ -301,7 +303,7 @@ def create_app() -> FastAPI:
         try:
             start_time = time.time()
 
-            answer, meta = answer_once(
+            result = answer_once(
                 request.question,
                 app.state.chunks,
                 app.state.vecs_n,
@@ -310,16 +312,17 @@ def create_app() -> FastAPI:
                 pack_top=request.pack_top,
                 threshold=request.threshold,
                 hnsw=app.state.hnsw,
-                debug=request.debug,
             )
 
             elapsed_ms = (time.time() - start_time) * 1000
 
             return QueryResponse(
                 question=request.question,
-                answer=answer,
-                confidence=meta.get("confidence"),
-                sources=meta.get("selected", [])[:5],  # Top 5 sources
+                answer=result.get("answer", ""),
+                confidence=result.get("confidence"),
+                sources=result.get("selected_chunks", [])[:5],  # Top 5 sources
+                metadata=result.get("metadata", {}) or {},
+                routing=result.get("routing"),
                 timestamp=datetime.now(),
                 processing_time_ms=elapsed_ms,
             )

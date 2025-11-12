@@ -1,44 +1,45 @@
 import json
-import os
-import pytest
 
-from clockify_rag.cli import chat_repl
-from clockify_rag import answer_once, build, load_index
 import clockify_rag.cli as cli_module
+from clockify_rag.cli import chat_repl
 
 
-@pytest.mark.skip(reason="Test needs update: answer_once() return structure changed, load_index() location changed")
 def test_chat_repl_json_output(monkeypatch, capsys):
-    # Ensure environment setup routines are no-ops for the test
-    # Note: _log_config_summary and warmup_on_startup may need to be found in cli module
-    # monkeypatch.setattr(cli_module, "_log_config_summary", lambda **_: None)
-    # monkeypatch.setattr(cli_module, "warmup_on_startup", lambda: None)
-    monkeypatch.setattr(os.path, "exists", lambda path: True)
+    """Ensure REPL surfaces new answer_once metadata in JSON mode."""
 
-    # Import build from indexing module
-    import clockify_rag.indexing
-    monkeypatch.setattr(clockify_rag.indexing, "build", lambda *_, **__: None)
+    # Stub expensive startup routines
+    monkeypatch.setattr(cli_module, "_log_config_summary", lambda **_: None)
+    monkeypatch.setattr(cli_module, "warmup_on_startup", lambda: None)
 
-    # Provide deterministic artifacts and retrieval response
-    chunks = {"chunk-1": {"id": "chunk-1", "text": "Citation text"}}
-    monkeypatch.setattr(clockify_rag.indexing, "load_index", lambda: (chunks, object(), object(), object()))
+    class DummyCache:
+        def __init__(self):
+            self.cache = {}
 
-    expected_citations = [{"id": "chunk-1", "text": "Citation text"}]
+        def load(self):
+            return None
+
+        def save(self):
+            return None
+
+    monkeypatch.setattr(cli_module, "get_query_cache", lambda: DummyCache())
+    monkeypatch.setattr(cli_module, "get_precomputed_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli_module, "ensure_index_ready", lambda **_: ([], [], {}, None))
+
+    expected_citations = [1, 2, 3]
     expected_tokens = 987
 
-    def fake_answer_once(*args, **kwargs):
-        return "Mocked answer", {
-            "selected": expected_citations,
-            "used_tokens": expected_tokens,
-        }
+    result_payload = {
+        "answer": "Mocked answer",
+        "confidence": 0.82,
+        "selected_chunks": expected_citations,
+        "metadata": {"used_tokens": expected_tokens, "retrieval_count": len(expected_citations)},
+    }
 
-    import clockify_rag.answer
-    monkeypatch.setattr(clockify_rag.answer, "answer_once", fake_answer_once)
+    monkeypatch.setattr(cli_module, "answer_once", lambda *_, **__: result_payload)
 
-    # Simulate a single question followed by EOF to exit the REPL
-    inputs = iter(["What is Clockify?"])
+    inputs = iter(["What is Clockify?", ":exit"])
 
-    def fake_input(_prompt=""):
+    def fake_input(_prompt: str = ""):
         try:
             return next(inputs)
         except StopIteration:
@@ -50,8 +51,7 @@ def test_chat_repl_json_output(monkeypatch, capsys):
 
     captured = capsys.readouterr().out
     json_start = captured.index("{")
-    json_payload = captured[json_start:]
-    output = json.loads(json_payload)
+    output = json.loads(captured[json_start:])
 
-    assert output["debug"]["meta"]["used_tokens"] == expected_tokens
+    assert output["used_tokens"] == expected_tokens
     assert output["citations"] == expected_citations
