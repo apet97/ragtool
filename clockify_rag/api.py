@@ -335,7 +335,9 @@ def create_app() -> FastAPI:
         # Check Ollama connectivity with short timeout
         ollama_ok = False
         try:
-            check_ollama_connectivity(config.OLLAMA_URL, timeout=2)
+            await run_in_threadpool(
+                check_ollama_connectivity, config.OLLAMA_URL, timeout=2
+            )
             ollama_ok = True
         except Exception as e:
             # Ollama connectivity failure is acceptable for health check
