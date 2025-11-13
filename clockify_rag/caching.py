@@ -21,6 +21,8 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
 
 logger = logging.getLogger(__name__)
 
+from .metrics import increment_counter, set_gauge, MetricNames
+
 # FIX (Error #2): Declare globals at module level for safe initialization
 _RATE_LIMITER = None
 _QUERY_CACHE = None
@@ -97,6 +99,7 @@ class RateLimiter:
         """Return True if request is allowed for the identity."""
 
         if self._identity_disabled and not self._global_limit:
+            increment_counter(MetricNames.RATE_LIMIT_ALLOWED, labels={"scope": "unlimited"})
             return True
 
         now = self._time_fn()
@@ -107,12 +110,14 @@ class RateLimiter:
             if not self._identity_disabled:
                 bucket = self._prune_identity(key, now)
                 if len(bucket) >= self.max_requests:
+                    increment_counter(MetricNames.RATE_LIMIT_BLOCKED, labels={"scope": "identity"})
                     return False
 
             global_bucket = None
             if self._global_limit:
                 global_bucket = self._prune_global(now)
                 if len(global_bucket) >= self._global_limit.max_requests:
+                    increment_counter(MetricNames.RATE_LIMIT_BLOCKED, labels={"scope": "global"})
                     return False
 
             if not self._identity_disabled:
@@ -123,6 +128,10 @@ class RateLimiter:
                 global_bucket = global_bucket or self._prune_global(now)
                 global_bucket.append(now)
 
+            scope = "identity" if not self._identity_disabled else "global"
+            if self._identity_disabled and not self._global_limit:
+                scope = "unlimited"
+            increment_counter(MetricNames.RATE_LIMIT_ALLOWED, labels={"scope": scope})
             return True
 
     def wait_time(self, identity: Optional[str] = None) -> float:
@@ -226,6 +235,7 @@ class RedisRateLimiter:
 
     def allow_request(self, identity: Optional[str] = None) -> bool:
         if self._identity_disabled() and not self.global_limit:
+            increment_counter(MetricNames.RATE_LIMIT_ALLOWED, labels={"scope": "unlimited"})
             return True
 
         now = time.time()
@@ -246,7 +256,17 @@ class RedisRateLimiter:
             if self.global_limit:
                 global_key = self._key("__global__", self.global_limit)
                 self._record_event(global_key, self.global_limit, now)
+            scope = "identity" if not self._identity_disabled() else "global"
+            if self._identity_disabled() and not self.global_limit:
+                scope = "unlimited"
+            increment_counter(MetricNames.RATE_LIMIT_ALLOWED, labels={"scope": scope})
             return True
+        if not identity_allowed:
+            increment_counter(MetricNames.RATE_LIMIT_BLOCKED, labels={"scope": "identity"})
+        elif not global_allowed:
+            increment_counter(MetricNames.RATE_LIMIT_BLOCKED, labels={"scope": "global"})
+        else:
+            increment_counter(MetricNames.RATE_LIMIT_BLOCKED, labels={"scope": "unknown"})
         return False
 
     def _wait_time_for_key(self, key: str, settings: RateLimitSettings, now: float) -> float:
@@ -405,6 +425,15 @@ class QueryCache:
         self.hits = 0
         self.misses = 0
         self._lock = threading.RLock()  # Thread safety lock
+        self._update_gauges_locked()
+
+    def _update_gauges_locked(self):
+        """Update cache-related gauges (expects lock held)."""
+
+        total = self.hits + self.misses
+        hit_rate = (self.hits / total) if total > 0 else 0.0
+        set_gauge(MetricNames.CACHE_SIZE, float(len(self.cache)))
+        set_gauge(MetricNames.CACHE_HIT_RATE, float(hit_rate))
 
     def _hash_question(self, question: str, params: dict = None) -> str:
         """Generate cache key from question and retrieval parameters.
@@ -436,6 +465,8 @@ class QueryCache:
 
             if key not in self.cache:
                 self.misses += 1
+                increment_counter(MetricNames.CACHE_MISSES)
+                self._update_gauges_locked()
                 return None
 
             answer, metadata, timestamp = self.cache[key]
@@ -452,12 +483,16 @@ class QueryCache:
                 del self.cache[key]
                 self.access_order.remove(key)
                 self.misses += 1
+                increment_counter(MetricNames.CACHE_MISSES)
+                self._update_gauges_locked()
                 return None
 
             # Cache hit - update access order
             self.access_order.remove(key)
             self.access_order.append(key)
             self.hits += 1
+            increment_counter(MetricNames.CACHE_HITS)
+            self._update_gauges_locked()
             logger.debug(f"[cache] HIT question_hash={key[:8]} age={age:.1f}s")
             return answer, metadata
 
@@ -492,6 +527,8 @@ class QueryCache:
                 self.access_order.remove(key)
             self.access_order.append(key)
 
+            self._update_gauges_locked()
+
             logger.debug(f"[cache] PUT question_hash={key[:8]}")
 
     def clear(self):
@@ -501,6 +538,7 @@ class QueryCache:
             self.access_order.clear()
             self.hits = 0
             self.misses = 0
+            self._update_gauges_locked()
             logger.info("[cache] CLEAR")
 
     def stats(self) -> dict:
@@ -609,6 +647,7 @@ class QueryCache:
                 # self.misses = cache_data.get("misses", 0)
 
                 logger.info(f"[cache] LOAD {loaded_count} entries from {path} (skipped {len(cache_data.get('entries', [])) - loaded_count} expired)")
+                self._update_gauges_locked()
                 return loaded_count
 
             except Exception as e:

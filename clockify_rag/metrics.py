@@ -461,6 +461,8 @@ class MetricNames:
     CACHE_MISSES = "cache_misses"
     ERRORS_TOTAL = "errors_total"
     REFUSALS_TOTAL = "refusals_total"
+    RATE_LIMIT_ALLOWED = "rate_limit_allowed"
+    RATE_LIMIT_BLOCKED = "rate_limit_blocked"
 
     # Histograms (latency in milliseconds)
     QUERY_LATENCY = "query_latency_ms"
@@ -473,6 +475,7 @@ class MetricNames:
     CACHE_SIZE = "cache_size_entries"
     INDEX_SIZE = "index_size_chunks"
     ACTIVE_QUERIES = "active_queries"
+    CACHE_HIT_RATE = "cache_hit_rate"
 
 
 __all__ = [

@@ -20,10 +20,11 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 import typer
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, validator
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from . import config
 from .answer import answer_once
@@ -33,6 +34,7 @@ from .indexing import build
 from .logging_utils import log_query_event
 from .utils import check_ollama_connectivity
 from .exceptions import ValidationError
+from .metrics import get_metrics, set_gauge, MetricNames
 
 logger = logging.getLogger(__name__)
 
@@ -279,11 +281,14 @@ def create_app() -> FastAPI:
                     app.state.bm = bm
                     app.state.hnsw = hnsw
                     app.state.index_ready = True
+                set_gauge(MetricNames.INDEX_SIZE, float(len(chunks)))
                 logger.info(f"Index loaded: {len(chunks)} chunks")
             else:
                 logger.warning("Index not ready at startup")
+                set_gauge(MetricNames.INDEX_SIZE, 0.0)
         except Exception as e:
             logger.error(f"Failed to load index at startup: {e}")
+            set_gauge(MetricNames.INDEX_SIZE, 0.0)
 
     @app.on_event("shutdown")
     async def shutdown_event():
@@ -304,6 +309,7 @@ def create_app() -> FastAPI:
             app.state.bm = None
             app.state.hnsw = None
             app.state.index_ready = False
+        set_gauge(MetricNames.INDEX_SIZE, 0.0)
 
         logger.info("Graceful shutdown complete")
 
@@ -532,6 +538,7 @@ def create_app() -> FastAPI:
                         app.state.bm = bm
                         app.state.hnsw = hnsw
                         app.state.index_ready = True
+                    set_gauge(MetricNames.INDEX_SIZE, float(len(chunks)))
                     logger.info("Ingest completed successfully")
                 except Exception as e:
                     logger.error(f"Ingest failed: {e}", exc_info=True)
@@ -541,6 +548,7 @@ def create_app() -> FastAPI:
                         app.state.bm = None
                         app.state.hnsw = None
                         app.state.index_ready = False
+                    set_gauge(MetricNames.INDEX_SIZE, 0.0)
 
             background_tasks.add_task(do_ingest)
 
@@ -572,27 +580,41 @@ def create_app() -> FastAPI:
             )
 
     # ========================================================================
-    # Metrics Endpoint (Placeholder)
+    # Metrics Endpoint
     # ========================================================================
 
     @app.get("/v1/metrics")
-    async def get_metrics(
+    async def get_metrics_endpoint(
         _: Dict[str, Any] = Depends(validate_request_credentials),
-    ) -> Dict[str, Any]:
-        """Get system metrics (placeholder for Prometheus integration).
+        format: str = Query("json", alias="format"),
+        include_histograms: bool = Query(
+            False, description="Include raw histogram observations in JSON output"
+        ),
+    ) -> Any:
+        """Expose collected system metrics in multiple formats."""
 
-        Returns:
-            Dictionary with metrics (JSON for easy parsing)
-        """
+        collector = get_metrics()
+        fmt = (format or "json").lower()
+
         with app.state.index_lock:
-            chunks = app.state.chunks
+            chunk_count = len(app.state.chunks) if app.state.chunks else 0
             index_ready = app.state.index_ready
 
-        return {
-            "timestamp": datetime.now().isoformat(),
-            "index_ready": index_ready,
-            "chunks_loaded": len(chunks) if chunks else 0,
-        }
+        set_gauge(MetricNames.INDEX_SIZE, float(chunk_count))
+
+        if fmt in {"prometheus", "text"}:
+            prom = collector.export_prometheus()
+            return PlainTextResponse(prom, media_type="text/plain")
+
+        if fmt == "csv":
+            csv_data = collector.export_csv()
+            return PlainTextResponse(csv_data, media_type="text/csv")
+
+        data = json.loads(collector.export_json(include_histograms=include_histograms))
+        data["index_ready"] = index_ready
+        data["chunks_loaded"] = chunk_count
+
+        return JSONResponse(content=data)
 
     return app
 
