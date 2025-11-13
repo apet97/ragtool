@@ -303,6 +303,16 @@ REFUSAL_STR = "I don't know based on the MD."
 
 # Query logging configuration
 QUERY_LOG_FILE = os.environ.get("RAG_LOG_FILE", "rag_queries.jsonl")
+QUERY_LOG_MAX_BYTES = _parse_env_int(
+    "RAG_LOG_FILE_MAX_BYTES",
+    5_000_000,
+    min_val=0,
+)
+QUERY_LOG_BACKUP_COUNT = _parse_env_int(
+    "RAG_LOG_FILE_BACKUP_COUNT",
+    5,
+    min_val=0,
+)
 LOG_QUERY_INCLUDE_ANSWER = _get_bool_env("RAG_LOG_INCLUDE_ANSWER", "1")
 LOG_QUERY_ANSWER_PLACEHOLDER = os.environ.get("RAG_LOG_ANSWER_PLACEHOLDER", "[REDACTED]")
 LOG_QUERY_INCLUDE_CHUNKS = _get_bool_env("RAG_LOG_INCLUDE_CHUNKS", "0")  # Redact chunk text by default for security/privacy

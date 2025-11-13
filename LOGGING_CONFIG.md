@@ -11,6 +11,8 @@ This document explains all logging-related environment variables for the Clockif
 | `RAG_LOG_INCLUDE_ANSWER` | `1` | Include answer text in logs (`0` to redact) |
 | `RAG_LOG_ANSWER_PLACEHOLDER` | `[REDACTED]` | Placeholder when answer is redacted |
 | `RAG_LOG_INCLUDE_CHUNKS` | `0` | Include full chunk text in logs (`1` to enable) |
+| `RAG_LOG_FILE_MAX_BYTES` | `5000000` | Rotate query log after this many bytes (0 disables rotation) |
+| `RAG_LOG_FILE_BACKUP_COUNT` | `5` | Number of rotated query log files to retain |
 
 ## Detailed Configuration
 
@@ -30,6 +32,36 @@ Specifies where query logs are written. Each line is a JSON object containing:
 ```bash
 export RAG_LOG_FILE="/var/log/rag/queries.jsonl"
 python3 clockify_support_cli_final.py chat
+```
+
+### RAG_LOG_FILE_MAX_BYTES
+
+**Default**: `5000000` (≈5 MB)
+**Values**: Any non-negative integer (bytes)
+
+Controls when the query log rotates. When the active log exceeds this many bytes, it is rotated using Python's `RotatingFileHandler`.
+
+- Use a smaller value (e.g., `200000`) in development to confirm rotation behavior.
+- Set to `0` to disable rotation entirely (not recommended for production).
+
+**Example**:
+```bash
+export RAG_LOG_FILE_MAX_BYTES=10485760   # 10 MB per file
+```
+
+### RAG_LOG_FILE_BACKUP_COUNT
+
+**Default**: `5`
+**Values**: Any non-negative integer
+
+Determines how many rotated log files are retained alongside the active log.
+
+- Set to `0` to discard historical files when rotation occurs.
+- Increase the value for longer on-disk retention before shipping logs elsewhere.
+
+**Example**:
+```bash
+export RAG_LOG_FILE_BACKUP_COUNT=14   # Keep two weeks of daily logs (assuming 1 rotation/day)
 ```
 
 ### RAG_NO_LOG

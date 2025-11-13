@@ -11,6 +11,9 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Optional, Callable
 
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
 try:  # Optional dependency for distributed rate limiting
     import redis
     from redis import Redis, RedisError
@@ -24,6 +27,8 @@ logger = logging.getLogger(__name__)
 # FIX (Error #2): Declare globals at module level for safe initialization
 _RATE_LIMITER = None
 _QUERY_CACHE = None
+_QUERY_LOGGER = None
+_QUERY_LOGGER_LOCK = threading.Lock()
 
 
 class RateLimitError(RuntimeError):
@@ -631,6 +636,73 @@ def get_query_cache():
     return _QUERY_CACHE
 
 
+def _get_query_logger() -> logging.Logger:
+    """Return a dedicated logger for structured query logs."""
+
+    global _QUERY_LOGGER
+    if _QUERY_LOGGER is not None:
+        return _QUERY_LOGGER
+
+    with _QUERY_LOGGER_LOCK:
+        if _QUERY_LOGGER is not None:
+            return _QUERY_LOGGER
+
+        from .config import (
+            QUERY_LOG_BACKUP_COUNT,
+            QUERY_LOG_FILE,
+            QUERY_LOG_MAX_BYTES,
+        )
+
+        log_path = Path(QUERY_LOG_FILE)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        handler = RotatingFileHandler(
+            log_path,
+            maxBytes=int(QUERY_LOG_MAX_BYTES),
+            backupCount=int(QUERY_LOG_BACKUP_COUNT),
+            encoding="utf-8",
+        )
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        setattr(handler, "_clockify_query_handler", True)
+
+        query_logger = logging.getLogger("clockify_rag.query_log")
+        query_logger.setLevel(logging.INFO)
+        query_logger.propagate = False
+
+        for existing in list(query_logger.handlers):
+            if getattr(existing, "_clockify_query_handler", False):
+                query_logger.removeHandler(existing)
+                try:
+                    existing.close()
+                except Exception:  # pragma: no cover - best effort cleanup
+                    pass
+
+        query_logger.addHandler(handler)
+
+        _QUERY_LOGGER = query_logger
+        return _QUERY_LOGGER
+
+
+def _reset_query_logger_for_tests() -> None:
+    """Reset the cached query logger so tests can reconfigure it."""
+
+    global _QUERY_LOGGER
+    with _QUERY_LOGGER_LOCK:
+        if _QUERY_LOGGER is None:
+            return
+
+        for handler in list(_QUERY_LOGGER.handlers):
+            if getattr(handler, "_clockify_query_handler", False):
+                _QUERY_LOGGER.removeHandler(handler)
+                try:
+                    handler.close()
+                except Exception:  # pragma: no cover - best effort cleanup
+                    pass
+
+        _QUERY_LOGGER = None
+
+
 def log_query(query: str, answer: str, retrieved_chunks: list, latency_ms: float,
               refused: bool = False, metadata: dict = None):
     """Log query with structured JSON format for monitoring and analytics.
@@ -719,8 +791,13 @@ def log_query(query: str, answer: str, retrieved_chunks: list, latency_ms: float
         log_entry["answer"] = LOG_QUERY_ANSWER_PLACEHOLDER
 
     try:
-        with open(QUERY_LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-    except Exception as e:
+        query_logger = _get_query_logger()
+    except Exception as exc:  # pragma: no cover - initialization failures are rare
+        logger.warning("Failed to initialize query logger: %s", exc)
+        return
+
+    try:
+        query_logger.info(json.dumps(log_entry, ensure_ascii=False))
+    except Exception as e:  # pragma: no cover - handler failure is unexpected
         logger.warning(f"Failed to log query: {e}")
 

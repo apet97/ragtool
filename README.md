@@ -504,6 +504,8 @@ RAG_NO_LOG              # Disable logging: 1/0 (default: 0)
 RAG_LOG_INCLUDE_ANSWER  # Include answer text: 1/0 (default: 1)
 RAG_LOG_ANSWER_PLACEHOLDER  # Placeholder when answer redacted (default: [REDACTED])
 RAG_LOG_INCLUDE_CHUNKS  # Include chunk text: 1/0 (default: 0 for security)
+RAG_LOG_FILE_MAX_BYTES  # Rotate query log after N bytes (default: 5000000 ≈ 5 MB)
+RAG_LOG_FILE_BACKUP_COUNT  # Number of rotated files to keep (default: 5)
 ```
 See [LOGGING_CONFIG.md](LOGGING_CONFIG.md) for comprehensive logging documentation.
 
