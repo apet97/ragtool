@@ -35,42 +35,73 @@ def _normalize_chunk_dict(chunk: Mapping[str, Any], rank: int) -> Dict[str, Any]
 def build_chunk_log_entries(
     chunks: Sequence[Mapping[str, Any]] | None,
     selected_chunks: Sequence[Any] | None,
+    selected_chunk_ids: Sequence[Any] | None = None,
 ) -> List[Dict[str, Any]]:
     """Convert selected chunk references into structured log entries."""
 
-    if not selected_chunks:
+    if not selected_chunks and not selected_chunk_ids:
         return []
 
     log_entries: List[Dict[str, Any]] = []
     total_chunks = len(chunks) if chunks is not None else 0
+    chunk_id_lookup: Dict[str, Mapping[str, Any]] = {}
 
-    for rank, chunk_ref in enumerate(selected_chunks):
+    if chunks is not None:
+        for chunk in chunks:
+            ident = chunk.get("id") or chunk.get("chunk_id")
+            if ident is not None:
+                chunk_id_lookup[str(ident)] = chunk
+
+    seq_indices = list(selected_chunks or [])
+    seq_ids = list(selected_chunk_ids or [])
+    max_len = max(len(seq_indices), len(seq_ids))
+
+    for rank in range(max_len):
+        chunk_ref = seq_indices[rank] if rank < len(seq_indices) else None
+        chunk_id = seq_ids[rank] if rank < len(seq_ids) else None
+
         if isinstance(chunk_ref, Mapping):
             entry = _normalize_chunk_dict(chunk_ref, rank)
-            if entry.get("id") is None and "chunk_id" in chunk_ref:
+            if chunk_id is not None:
+                entry["id"] = chunk_id
+            elif entry.get("id") is None and "chunk_id" in chunk_ref:
                 entry["id"] = chunk_ref["chunk_id"]
             log_entries.append(entry)
             continue
 
-        try:
-            idx = int(chunk_ref)
-        except (TypeError, ValueError):
-            log_entries.append({"id": chunk_ref, "rank": rank})
-            continue
+        chunk_obj: Optional[Mapping[str, Any]] = None
+        idx_value: Optional[int] = None
 
-        if 0 <= idx < total_chunks and chunks is not None:
-            chunk = chunks[idx]
+        if chunk_ref is not None:
+            try:
+                idx_value = int(chunk_ref)
+            except (TypeError, ValueError):
+                log_entries.append({"id": chunk_ref if chunk_id is None else chunk_id, "rank": rank})
+                continue
+
+        if idx_value is not None and 0 <= idx_value < total_chunks and chunks is not None:
+            chunk_obj = chunks[idx_value]
+        elif chunk_id is not None:
+            chunk_obj = chunk_id_lookup.get(str(chunk_id))
+
+        if chunk_obj is not None:
+            entry_id = chunk_id
+            if entry_id is None:
+                entry_id = chunk_obj.get("id") or chunk_obj.get("chunk_id")
+            if entry_id is None and idx_value is not None:
+                entry_id = idx_value
             entry = {
-                "id": chunk.get("id", idx),
-                "title": chunk.get("title"),
-                "section": chunk.get("section"),
+                "id": entry_id,
+                "title": chunk_obj.get("title"),
+                "section": chunk_obj.get("section"),
                 "rank": rank,
             }
-            if "url" in chunk:
-                entry["url"] = chunk["url"]
+            if "url" in chunk_obj:
+                entry["url"] = chunk_obj["url"]
             log_entries.append(entry)
         else:
-            log_entries.append({"id": idx, "rank": rank})
+            fallback_id = chunk_id if chunk_id is not None else idx_value
+            log_entries.append({"id": fallback_id, "rank": rank})
 
     return log_entries
 
@@ -92,7 +123,11 @@ def log_query_event(
     if not question or not isinstance(result, Mapping):
         return
 
-    retrieved_chunks = build_chunk_log_entries(chunks, result.get("selected_chunks"))
+    retrieved_chunks = build_chunk_log_entries(
+        chunks,
+        result.get("selected_chunks"),
+        result.get("selected_chunk_ids"),
+    )
     timing = result.get("timing") or {}
     computed_latency = latency_ms if latency_ms is not None else timing.get("total_ms")
 

@@ -20,6 +20,7 @@ def test_query_command_surfaces_metadata(monkeypatch, cli_runner):
         "answer": "Mocked answer",
         "confidence": 0.77,
         "selected_chunks": [10, 20],
+        "selected_chunk_ids": ["doc-10", "doc-20"],
         "metadata": {"used_tokens": 42},
     }
 
@@ -38,5 +39,5 @@ def test_query_command_surfaces_metadata(monkeypatch, cli_runner):
     payload = json.loads("{" + response.stdout.split("{", 1)[1])
 
     assert payload["answer"] == result_payload["answer"]
-    assert payload["sources"] == result_payload["selected_chunks"]
+    assert payload["sources"] == result_payload["selected_chunk_ids"]
     assert payload["metadata"]["used_tokens"] == result_payload["metadata"]["used_tokens"]

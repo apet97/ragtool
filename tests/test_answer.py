@@ -332,6 +332,10 @@ class TestAnswerOnce:
         assert result["confidence"] == 85
         assert "timing" in result
         assert "metadata" in result
+        assert result["selected_chunk_ids"] == [c["id"] for c in sample_chunks[:3]]
+        assert result["packed_chunk_ids"]
+        assert set(result["packed_chunk_ids"]).issubset(set(result["selected_chunk_ids"]))
+        assert result["metadata"]["packed_count"] == len(result["packed_chunk_ids"])
 
     @patch('clockify_rag.answer.retrieve')
     def test_answer_once_low_coverage(self, mock_retrieve, sample_chunks, sample_embeddings):
@@ -360,6 +364,8 @@ class TestAnswerOnce:
 
         assert result["refused"]
         assert result["answer"] == REFUSAL_STR
+        assert result["selected_chunk_ids"] == []
+        assert result["packed_chunk_ids"] == []
 
     @patch('clockify_rag.answer.retrieve')
     @patch('clockify_rag.answer.ask_llm')

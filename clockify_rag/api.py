@@ -188,7 +188,7 @@ class QueryResponse(BaseModel):
     question: str
     answer: str
     confidence: Optional[float] = None
-    sources: List[int] = Field(default_factory=list, description="Chunk IDs used")
+    sources: List[int | str] = Field(default_factory=list, description="Chunk IDs used")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata from answer pipeline")
     routing: Optional[Dict[str, Any]] = Field(default=None, description="Routing recommendation metadata")
     timestamp: datetime
@@ -486,11 +486,13 @@ def create_app() -> FastAPI:
                 disabled=config.API_PRIVACY_MODE,
             )
 
+            sources = result.get("selected_chunk_ids") or result.get("selected_chunks", [])
+
             return QueryResponse(
                 question=request.question,
                 answer=result.get("answer", ""),
                 confidence=result.get("confidence"),
-                sources=result.get("selected_chunks", [])[:5],  # Top 5 sources
+                sources=sources[:5],  # Top 5 sources
                 metadata=result.get("metadata", {}) or {},
                 routing=result.get("routing"),
                 timestamp=datetime.now(),

@@ -363,6 +363,8 @@ def query(
 
         answer_text = result.get("answer", "")
         selected_chunks = result.get("selected_chunks", [])
+        selected_chunk_ids = result.get("selected_chunk_ids") or []
+        sources = selected_chunk_ids or selected_chunks
         metadata = result.get("metadata", {}) or {}
 
         if json_output:
@@ -370,17 +372,17 @@ def query(
                 "question": question,
                 "answer": answer_text,
                 "confidence": result.get("confidence"),
-                "sources": selected_chunks,
-                "num_sources": len(selected_chunks),
+                "sources": sources,
+                "num_sources": len(sources),
                 "metadata": metadata,
             }
             console.print(json.dumps(output, indent=2, ensure_ascii=False))
         else:
             console.print()
             console.print(answer_text)
-            if debug and selected_chunks:
+            if debug and sources:
                 console.print()
-                console.print(f"[dim]Sources: {selected_chunks[:3]}...[/dim]")
+                console.print(f"[dim]Sources: {sources[:3]}...[/dim]")
                 if metadata:
                     console.print(f"[dim]Metadata: {metadata}[/dim]")
 

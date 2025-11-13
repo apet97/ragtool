@@ -339,7 +339,9 @@ async def async_answer_once(
                 "refused": True,
                 "confidence": None,
                 "selected_chunks": [],
+                "selected_chunk_ids": [],
                 "packed_chunks": [],
+                "packed_chunk_ids": [],
                 "context_block": "",
                 "timing": {
                     "total_ms": (time.time() - t_start) * 1000,
@@ -365,7 +367,7 @@ async def async_answer_once(
         rerank_applied = False
         rerank_reason = "disabled"
         if use_rerank:
-            from .answer import apply_reranking
+        from .answer import apply_reranking
             t0 = time.time()
             mmr_selected, rerank_scores, rerank_applied, rerank_reason, rerank_time = apply_reranking(
                 question, chunks, mmr_selected, scores, use_rerank,
@@ -384,6 +386,11 @@ async def async_answer_once(
             retries=retries, packed_ids=packed_ids
         )
 
+        from .answer import _resolve_chunk_ids as _resolve_chunk_ids_sync
+
+        selected_chunk_ids = _resolve_chunk_ids_sync(chunks, selected)
+        packed_chunk_ids = list(packed_ids or [])
+
         total_time = time.time() - t_start
 
         # Confidence-based routing
@@ -395,7 +402,9 @@ async def async_answer_once(
             "refused": refused,
             "confidence": confidence,
             "selected_chunks": selected,
+            "selected_chunk_ids": selected_chunk_ids,
             "packed_chunks": mmr_selected,
+            "packed_chunk_ids": packed_chunk_ids,
             "context_block": context_block,
             "timing": {
                 "total_ms": total_time * 1000,

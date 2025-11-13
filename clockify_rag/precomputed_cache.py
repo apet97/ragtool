@@ -126,6 +126,10 @@ class PrecomputedCache:
             "confidence": answer_data.get("confidence"),
             "refused": answer_data.get("refused"),
             "packed_chunks": answer_data.get("packed_chunks", []),
+            "selected_chunk_ids": answer_data.get("selected_chunk_ids", []),
+            "packed_chunk_ids": answer_data.get("packed_chunk_ids")
+            or answer_data.get("selected_chunk_ids", [])
+            or [],
             "metadata": answer_data.get("metadata", {}),
             "routing": answer_data.get("routing", {}),
         }

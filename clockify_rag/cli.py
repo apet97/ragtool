@@ -179,12 +179,15 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
         if faq_result:
             # FAQ cache hit - synthesize result compatible with answer_once output
             cached_chunks = faq_result.get("packed_chunks", [])
+            cached_chunk_ids = faq_result.get("packed_chunk_ids") or faq_result.get("selected_chunk_ids") or []
             result = {
                 "answer": faq_result["answer"],
                 "refused": False,
                 "confidence": faq_result.get("confidence"),
                 "selected_chunks": cached_chunks,
+                "selected_chunk_ids": cached_chunk_ids,
                 "packed_chunks": cached_chunks,
+                "packed_chunk_ids": cached_chunk_ids,
                 "context_block": "",
                 "timing": {},
                 "metadata": {
@@ -224,7 +227,7 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
                 continue
 
         answer_text = result.get("answer", "")
-        citations = result.get("selected_chunks", [])
+        citations = result.get("selected_chunk_ids") or result.get("selected_chunks", [])
         metadata = result.get("metadata", {}) or {}
 
         if use_json:
@@ -503,7 +506,7 @@ def handle_ask_command(args):
         print(f"Validation error: {exc}")
         return
     answer_text = result.get("answer", "")
-    citations = result.get("selected_chunks", [])
+    citations = result.get("selected_chunk_ids") or result.get("selected_chunks", [])
     metadata = result.get("metadata", {}) or {}
 
     if getattr(args, "json", False):

@@ -26,13 +26,14 @@ def test_chat_repl_json_output(monkeypatch, capsys):
     monkeypatch.setattr(cli_module, "get_precomputed_cache", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli_module, "ensure_index_ready", lambda **_: ([], [], {}, None))
 
-    expected_citations = [1, 2, 3]
+    expected_citations = ["doc-1", "doc-2", "doc-3"]
     expected_tokens = 987
 
     result_payload = {
         "answer": "Mocked answer",
         "confidence": 0.82,
-        "selected_chunks": expected_citations,
+        "selected_chunks": [0, 1, 2],
+        "selected_chunk_ids": expected_citations,
         "metadata": {"used_tokens": expected_tokens, "retrieval_count": len(expected_citations)},
     }
 

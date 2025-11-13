@@ -14,6 +14,7 @@ def test_api_query_returns_metadata(monkeypatch):
         "answer": "Mocked answer",
         "confidence": 0.91,
         "selected_chunks": [3, 4, 5],
+        "selected_chunk_ids": ["doc-3", "doc-4", "doc-5"],
         "metadata": {"used_tokens": 128, "retrieval_count": 3},
         "routing": {"action": "self-serve"},
     }
@@ -32,7 +33,7 @@ def test_api_query_returns_metadata(monkeypatch):
         payload = response.json()
 
         assert payload["answer"] == result_payload["answer"]
-        assert payload["sources"] == result_payload["selected_chunks"][:5]
+        assert payload["sources"] == result_payload["selected_chunk_ids"][:5]
         assert payload["metadata"]["used_tokens"] == result_payload["metadata"]["used_tokens"]
         assert payload["routing"] == result_payload["routing"]
 
