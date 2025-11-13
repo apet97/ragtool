@@ -1,7 +1,8 @@
 """Tests for query caching functionality."""
 import pytest
-import sys
+import json
 import os
+import sys
 import time
 
 # Add parent directory to path
@@ -309,6 +310,45 @@ class TestQueryCache:
         answer_with_params, metadata_with_params = result_with_params
         assert answer_with_params == "answer_with_params"
         assert metadata_with_params["variant"] == "with_params"
+
+    def test_save_creates_directory_and_is_atomic(self, tmp_path):
+        """Saving should create parent directories and write atomically."""
+        question = "Do directories exist?"
+        self.cache.put(question, "yes", {"meta": True})
+
+        cache_path = tmp_path / "nested" / "query_cache.json"
+        assert not cache_path.parent.exists()
+
+        self.cache.save(str(cache_path))
+
+        assert cache_path.exists()
+        with open(cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        assert data["entries"][0]["answer"] == "yes"
+
+    def test_save_ignores_stale_partial_temp_file(self, tmp_path):
+        """A leftover temp file should not corrupt the main cache file."""
+        question = "Is the cache consistent?"
+        self.cache.put(question, "consistent", {"meta": "fresh"})
+
+        cache_path = tmp_path / "cache.json"
+        tmp_file = cache_path.parent / f"{cache_path.name}.tmp"
+
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({"entries": [], "version": "old"}, f)
+
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            f.write("{")  # Simulate interrupted write
+
+        self.cache.save(str(cache_path))
+
+        with open(cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        assert data["entries"][0]["answer"] == "consistent"
+        assert not tmp_file.exists()
 
 
 if __name__ == "__main__":

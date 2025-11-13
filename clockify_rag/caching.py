@@ -14,6 +14,8 @@ from typing import Optional, Callable
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from .utils import _fsync_dir
+
 try:  # Optional dependency for distributed rate limiting
     import redis
     from redis import Redis, RedisError
@@ -573,7 +575,11 @@ class QueryCache:
         """
         import json
         with self._lock:
+            path_obj = Path(path)
+            tmp_path = path_obj.parent / f"{path_obj.name}.tmp"
             try:
+                path_obj.parent.mkdir(parents=True, exist_ok=True)
+
                 cache_data = {
                     "version": "1.0",
                     "maxsize": self.maxsize,
@@ -591,11 +597,22 @@ class QueryCache:
                     "hits": self.hits,
                     "misses": self.misses
                 }
-                with open(path, 'w', encoding='utf-8') as f:
+
+                with open(tmp_path, 'w', encoding='utf-8') as f:
                     json.dump(cache_data, f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+
+                os.replace(tmp_path, path_obj)
+                _fsync_dir(str(path_obj))
                 logger.info(f"[cache] SAVE {len(self.cache)} entries to {path}")
             except Exception as e:
                 logger.warning(f"[cache] Failed to save cache: {e}")
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except Exception:
+                    pass
 
     def load(self, path: str = "query_cache.json"):
         """Load cache from disk to restore across sessions.
