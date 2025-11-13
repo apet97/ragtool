@@ -465,69 +465,91 @@ def create_app() -> FastAPI:
     # Ingest Endpoint
     # ========================================================================
 
-    @app.post("/v1/ingest", response_model=IngestResponse)
-    async def trigger_ingest(
-        request: IngestRequest,
-        background_tasks: BackgroundTasks,
-        _: Dict[str, Any] = Depends(validate_request_credentials),
-    ) -> IngestResponse:
-        """Trigger index build/rebuild.
+    secure_ingest_modes = {"api_key", "jwt"}
+    auth_mode = (config.API_AUTH_MODE or "none").strip().lower()
 
-        Starts a background task to build the index from the knowledge base.
+    if auth_mode in secure_ingest_modes:
 
-        Args:
-            request: IngestRequest with input file and options
-            background_tasks: FastAPI background tasks
+        @app.post("/v1/ingest", response_model=IngestResponse)
+        async def trigger_ingest(
+            request: IngestRequest,
+            background_tasks: BackgroundTasks,
+            _: Dict[str, Any] = Depends(validate_request_credentials),
+        ) -> IngestResponse:
+            """Trigger index build/rebuild.
 
-        Returns:
-            IngestResponse with status
+            Starts a background task to build the index from the knowledge base.
 
-        Note:
-            Build happens asynchronously. Check /health to verify completion.
-        """
-        input_file = request.input_file or "knowledge_full.md"
+            Args:
+                request: IngestRequest with input file and options
+                background_tasks: FastAPI background tasks
 
-        if not os.path.exists(input_file):
-            raise HTTPException(status_code=404, detail=f"Input file not found: {input_file}")
+            Returns:
+                IngestResponse with status
 
-        def do_ingest():
-            """Background task to build index."""
-            try:
-                logger.info(f"Starting ingest from {input_file}")
-                build(input_file, retries=2)
+            Note:
+                Build happens asynchronously. Check /health to verify completion.
+            """
+            input_file = request.input_file or "knowledge_full.md"
 
-                result = ensure_index_ready(retries=2)
-                if not result:
-                    raise RuntimeError("Index artifacts missing after build")
+            if not os.path.exists(input_file):
+                raise HTTPException(status_code=404, detail=f"Input file not found: {input_file}")
 
-                chunks, vecs_n, bm, hnsw = result
-                with app.state.index_lock:
-                    app.state.chunks = chunks
-                    app.state.vecs_n = vecs_n
-                    app.state.bm = bm
-                    app.state.hnsw = hnsw
-                    app.state.index_ready = True
-                logger.info("Ingest completed successfully")
-            except Exception as e:
-                logger.error(f"Ingest failed: {e}", exc_info=True)
-                with app.state.index_lock:
-                    app.state.chunks = None
-                    app.state.vecs_n = None
-                    app.state.bm = None
-                    app.state.hnsw = None
-                    app.state.index_ready = False
+            def do_ingest():
+                """Background task to build index."""
+                try:
+                    logger.info(f"Starting ingest from {input_file}")
+                    build(input_file, retries=2)
 
-        background_tasks.add_task(do_ingest)
+                    result = ensure_index_ready(retries=2)
+                    if not result:
+                        raise RuntimeError("Index artifacts missing after build")
 
-        with app.state.index_lock:
-            index_ready = app.state.index_ready
+                    chunks, vecs_n, bm, hnsw = result
+                    with app.state.index_lock:
+                        app.state.chunks = chunks
+                        app.state.vecs_n = vecs_n
+                        app.state.bm = bm
+                        app.state.hnsw = hnsw
+                        app.state.index_ready = True
+                    logger.info("Ingest completed successfully")
+                except Exception as e:
+                    logger.error(f"Ingest failed: {e}", exc_info=True)
+                    with app.state.index_lock:
+                        app.state.chunks = None
+                        app.state.vecs_n = None
+                        app.state.bm = None
+                        app.state.hnsw = None
+                        app.state.index_ready = False
 
-        return IngestResponse(
-            status="processing",
-            message=f"Index build started in background from {input_file}",
-            timestamp=datetime.now(),
-            index_ready=index_ready,
+            background_tasks.add_task(do_ingest)
+
+            with app.state.index_lock:
+                index_ready = app.state.index_ready
+
+            return IngestResponse(
+                status="processing",
+                message=f"Index build started in background from {input_file}",
+                timestamp=datetime.now(),
+                index_ready=index_ready,
+            )
+
+    else:
+        logger.warning(
+            "Disabling /v1/ingest: secure auth mode required (set RAG_AUTH_MODE to 'api_key' or 'jwt')."
         )
+
+        @app.post("/v1/ingest", response_model=IngestResponse)
+        async def ingest_disabled(
+            _request: IngestRequest,
+            _background_tasks: BackgroundTasks,
+        ) -> IngestResponse:
+            """Reject ingest attempts when API auth is not enforced."""
+
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Ingest disabled until RAG_AUTH_MODE is set to 'api_key' or 'jwt'",
+            )
 
     # ========================================================================
     # Metrics Endpoint (Placeholder)

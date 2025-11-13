@@ -14,8 +14,10 @@ supported:
 2. **JWT Bearer tokens** – verify signed tokens issued by an identity
    provider. This option requires the optional `PyJWT` dependency.
 
-If `RAG_AUTH_MODE` is unset or explicitly set to `none`, the API remains open as
-before.
+If `RAG_AUTH_MODE` is unset or explicitly set to `none`, the query and metrics
+endpoints remain open as before, but `/v1/ingest` is now blocked with `403`
+responses until a secure mode (`api_key` or `jwt`) is configured. This prevents
+unauthenticated rebuilds that could tamper with the knowledge base.
 
 ## Configuration
 

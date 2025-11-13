@@ -197,6 +197,7 @@ python3 clockify_support_cli_final.py --selftest
 - `trust_env=False` by default (set `ALLOW_PROXIES=1` or legacy `USE_PROXY=1` to enable)
 - All POST calls use explicit (connect, read) timeouts
 - Policy guardrails for sensitive queries
+- `/v1/ingest` is disabled (HTTP 403) unless `RAG_AUTH_MODE` is set to `api_key` or `jwt`, ensuring only authenticated operators can rebuild the index
 
 ## DeepSeek Ollama Shim – Production Guidance
 
