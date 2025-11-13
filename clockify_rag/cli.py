@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import sys
+import time
 import numpy as np
 from typing import Tuple, Optional, Any
 
@@ -22,8 +23,26 @@ from .retrieval import set_query_expansion_path, load_query_expansion_dict, QUER
 from .http_utils import http_post_with_retries
 from .precomputed_cache import get_precomputed_cache
 from .exceptions import ValidationError
+from .logging_utils import log_query_event
 
 logger = logging.getLogger(__name__)
+QUERY_LOG_DISABLED = False
+
+
+def _log_cli_query(question: str, result: dict, chunks, latency_ms: float, channel: str) -> None:
+    """Persist query metadata unless logging is disabled."""
+
+    if not result:
+        return
+
+    log_query_event(
+        question,
+        result,
+        chunks,
+        latency_ms,
+        channel=channel,
+        disabled=QUERY_LOG_DISABLED,
+    )
 
 
 def ensure_index_ready(retries=0) -> Tuple:
@@ -143,6 +162,7 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
         if faq_cache:
             faq_result = faq_cache.get(question, fuzzy=True)
 
+        used_answer_once = False
         if faq_result:
             # FAQ cache hit - synthesize result compatible with answer_once output
             cached_chunks = faq_result.get("packed_chunks", [])
@@ -164,9 +184,11 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
             }
             if debug_enabled:
                 print("[DEBUG] FAQ cache hit (precomputed answer)")
+            latency_ms = None
         else:
             # FAQ cache miss - normal retrieval
             try:
+                call_start = time.time()
                 result = answer_once(
                     question,
                     chunks,
@@ -182,6 +204,8 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
                     num_predict=num_predict,
                     retries=retries
                 )
+                latency_ms = (time.time() - call_start) * 1000
+                used_answer_once = True
             except ValidationError as exc:
                 print(f"Validation error: {exc}")
                 continue
@@ -206,6 +230,15 @@ def chat_repl(top_k=12, pack_top=6, threshold=0.30, use_rerank=False, debug=Fals
             print(json.dumps(output, ensure_ascii=False, indent=2))
         else:
             print(f"\n{answer_text}")
+
+        if used_answer_once:
+            _log_cli_query(
+                question,
+                result,
+                chunks,
+                latency_ms if latency_ms is not None else result.get("timing", {}).get("total_ms", 0.0),
+                channel="cli-chat",
+            )
 
         # Show debug info if enabled
         if debug_enabled:
@@ -346,6 +379,7 @@ def configure_logging_and_config(args):
     Returns:
         query_log_disabled: Boolean flag for query logging
     """
+    global QUERY_LOG_DISABLED
     # Setup logging after CLI arg parsing
     level = getattr(logging, args.log if hasattr(args, "log") else "INFO")
     logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
@@ -365,6 +399,7 @@ def configure_logging_and_config(args):
         sys.exit(1)
 
     query_log_disabled = getattr(args, "no_log", False)
+    QUERY_LOG_DISABLED = query_log_disabled
 
     # Update globals from CLI args
     config.EMB_BACKEND = args.emb_backend
@@ -420,6 +455,7 @@ def handle_ask_command(args):
 
     chunks, vecs_n, bm, hnsw = ensure_index_ready(retries=getattr(args, "retries", 0))
     try:
+        call_start = time.time()
         result = answer_once(
             args.question,
             chunks,
@@ -435,6 +471,7 @@ def handle_ask_command(args):
             num_predict=args.num_predict,
             retries=getattr(args, "retries", 0)
         )
+        latency_ms = (time.time() - call_start) * 1000
     except ValidationError as exc:
         print(f"Validation error: {exc}")
         return
@@ -457,6 +494,14 @@ def handle_ask_command(args):
         print(json.dumps(output, ensure_ascii=False, indent=2))
     else:
         print(answer_text)
+
+    _log_cli_query(
+        args.question,
+        result,
+        chunks,
+        latency_ms if latency_ms is not None else result.get("timing", {}).get("total_ms", 0.0),
+        channel="cli-ask",
+    )
 
     if getattr(args, "debug", False):
         print(f"[DEBUG] Retrieved: {len(citations)} chunks")

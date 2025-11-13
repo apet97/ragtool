@@ -84,6 +84,13 @@ def _parse_env_int(key: str, default: int, min_val: int = None, max_val: int = N
     return parsed
 
 
+def _get_bool_env(var_name: str, default: str = "1") -> bool:
+    """Read a boolean environment variable."""
+
+    value = os.environ.get(var_name, default)
+    return value.lower() not in {"0", "false", "no", "off", ""}
+
+
 # ====== API CONFIG ======
 
 
@@ -179,6 +186,7 @@ API_JWT_ALGORITHMS = [
     for algo in os.environ.get("RAG_JWT_ALGORITHMS", "HS256").split(",")
     if algo.strip()
 ]
+API_PRIVACY_MODE = _get_bool_env("RAG_API_PRIVACY_MODE", "0")
 
 # ====== OLLAMA CONFIG ======
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
@@ -292,14 +300,6 @@ EMB_BATCH_SIZE = _parse_env_int("EMB_BATCH_SIZE", 32, min_val=1, max_val=1000)  
 REFUSAL_STR = "I don't know based on the MD."
 
 # ====== LOGGING CONFIG ======
-
-
-def _get_bool_env(var_name: str, default: str = "1") -> bool:
-    """Read a boolean environment variable."""
-
-    value = os.environ.get(var_name, default)
-    return value.lower() not in {"0", "false", "no", "off", ""}
-
 
 # Query logging configuration
 QUERY_LOG_FILE = os.environ.get("RAG_LOG_FILE", "rag_queries.jsonl")

@@ -13,6 +13,7 @@ import logging
 import os
 import platform
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -22,11 +23,13 @@ from rich.panel import Panel
 from rich.table import Table
 
 from . import config
+from . import cli as legacy_cli
 from .answer import answer_once
 from .caching import get_query_cache
 from .cli import ensure_index_ready, chat_repl
 from .embedding import _load_st_encoder
 from .indexing import build, load_index
+from .logging_utils import log_query_event
 from .utils import check_ollama_connectivity, check_pytorch_mps
 
 logger = logging.getLogger(__name__)
@@ -344,6 +347,7 @@ def query(
     try:
         chunks, vecs_n, bm, hnsw = ensure_index_ready(retries=2)
 
+        call_start = time.time()
         result = answer_once(
             question,
             chunks,
@@ -354,6 +358,7 @@ def query(
             threshold=threshold,
             hnsw=hnsw,
         )
+        latency_ms = (time.time() - call_start) * 1000
 
         answer_text = result.get("answer", "")
         selected_chunks = result.get("selected_chunks", [])
@@ -377,6 +382,15 @@ def query(
                 console.print(f"[dim]Sources: {selected_chunks[:3]}...[/dim]")
                 if metadata:
                     console.print(f"[dim]Metadata: {metadata}[/dim]")
+
+        log_query_event(
+            question,
+            result,
+            chunks,
+            latency_ms,
+            channel="cli-modern.query",
+            disabled=getattr(legacy_cli, "QUERY_LOG_DISABLED", False),
+        )
 
     except Exception as e:
         console.print(f"❌ Error: {e}")

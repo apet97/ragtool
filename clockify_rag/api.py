@@ -30,6 +30,7 @@ from .answer import answer_once
 from .caching import get_rate_limiter
 from .cli import ensure_index_ready
 from .indexing import build
+from .logging_utils import log_query_event
 from .utils import check_ollama_connectivity
 from .exceptions import ValidationError
 
@@ -442,6 +443,15 @@ def create_app() -> FastAPI:
             )
 
             elapsed_ms = (time.time() - start_time) * 1000
+
+            log_query_event(
+                request.question,
+                result,
+                chunks,
+                elapsed_ms,
+                channel="api.v1.query",
+                disabled=config.API_PRIVACY_MODE,
+            )
 
             return QueryResponse(
                 question=request.question,
