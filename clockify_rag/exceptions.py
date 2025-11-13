@@ -13,7 +13,10 @@ class LLMError(Exception):
 
 class IndexLoadError(Exception):
     """Index loading or validation failed."""
-    pass
+
+    def __init__(self, message: str, exit_code: int = 1):
+        super().__init__(message)
+        self.exit_code = exit_code
 
 
 class BuildError(Exception):

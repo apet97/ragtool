@@ -31,6 +31,7 @@ from .embedding import _load_st_encoder
 from .indexing import build, load_index
 from .logging_utils import log_query_event
 from .utils import check_ollama_connectivity, check_pytorch_mps
+from .exceptions import IndexLoadError
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -392,6 +393,10 @@ def query(
             disabled=getattr(legacy_cli, "QUERY_LOG_DISABLED", False),
         )
 
+    except IndexLoadError as exc:
+        console.print(f"❌ Index load error: {exc}")
+        logger.error("Index load error: %s", exc)
+        raise typer.Exit(getattr(exc, "exit_code", 1))
     except Exception as e:
         console.print(f"❌ Error: {e}")
         logger.error(f"Query error: {e}", exc_info=True)
@@ -438,6 +443,10 @@ def chat(
     except KeyboardInterrupt:
         console.print("\n👋 Goodbye!")
         raise typer.Exit(0)
+    except IndexLoadError as exc:
+        console.print(f"❌ Index load error: {exc}")
+        logger.error("Index load error: %s", exc)
+        raise typer.Exit(getattr(exc, "exit_code", 1))
     except Exception as e:
         console.print(f"❌ Error: {e}")
         logger.error(f"Chat error: {e}", exc_info=True)
@@ -511,6 +520,10 @@ def eval(
         console.print(f"   python eval.py --dataset {questions_file}")
         raise typer.Exit(0)
 
+    except IndexLoadError as exc:
+        console.print(f"❌ Index load error: {exc}")
+        logger.error("Eval index load error: %s", exc)
+        raise typer.Exit(getattr(exc, "exit_code", 1))
     except Exception as e:
         console.print(f"❌ Evaluation failed: {e}")
         logger.error(f"Eval error: {e}", exc_info=True)

@@ -33,7 +33,7 @@ from .cli import ensure_index_ready
 from .indexing import build
 from .logging_utils import log_query_event
 from .utils import check_ollama_connectivity
-from .exceptions import ValidationError
+from .exceptions import ValidationError, IndexLoadError
 from .metrics import get_metrics, set_gauge, MetricNames
 
 logger = logging.getLogger(__name__)
@@ -286,8 +286,23 @@ def create_app() -> FastAPI:
             else:
                 logger.warning("Index not ready at startup")
                 set_gauge(MetricNames.INDEX_SIZE, 0.0)
+        except IndexLoadError as exc:
+            logger.error("Failed to load index at startup: %s", exc)
+            with app.state.index_lock:
+                app.state.chunks = None
+                app.state.vecs_n = None
+                app.state.bm = None
+                app.state.hnsw = None
+                app.state.index_ready = False
+            set_gauge(MetricNames.INDEX_SIZE, 0.0)
         except Exception as e:
             logger.error(f"Failed to load index at startup: {e}")
+            with app.state.index_lock:
+                app.state.chunks = None
+                app.state.vecs_n = None
+                app.state.bm = None
+                app.state.hnsw = None
+                app.state.index_ready = False
             set_gauge(MetricNames.INDEX_SIZE, 0.0)
 
     @app.on_event("shutdown")
@@ -542,6 +557,15 @@ def create_app() -> FastAPI:
                         app.state.index_ready = True
                     set_gauge(MetricNames.INDEX_SIZE, float(len(chunks)))
                     logger.info("Ingest completed successfully")
+                except IndexLoadError as exc:
+                    logger.error("Ingest failed to load index: %s", exc)
+                    with app.state.index_lock:
+                        app.state.chunks = None
+                        app.state.vecs_n = None
+                        app.state.bm = None
+                        app.state.hnsw = None
+                        app.state.index_ready = False
+                    set_gauge(MetricNames.INDEX_SIZE, 0.0)
                 except Exception as e:
                     logger.error(f"Ingest failed: {e}", exc_info=True)
                     with app.state.index_lock:

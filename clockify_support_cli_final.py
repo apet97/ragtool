@@ -330,7 +330,11 @@ def main():
 
     # Auto-start REPL if no command given
     if args.cmd is None:
-        chat_repl()
+        try:
+            chat_repl()
+        except IndexLoadError as exc:
+            logger.error("Failed to load index: %s", exc)
+            sys.exit(getattr(exc, "exit_code", 1))
         return
 
     # Route to appropriate command handler

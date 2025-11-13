@@ -22,7 +22,7 @@ from .caching import RateLimitError, get_query_cache, get_rate_limiter
 from .retrieval import set_query_expansion_path, load_query_expansion_dict, QUERY_EXPANSIONS_ENV_VAR
 from .http_utils import http_post_with_retries
 from .precomputed_cache import get_precomputed_cache
-from .exceptions import ValidationError
+from .exceptions import ValidationError, IndexLoadError
 from .logging_utils import log_query_event
 
 logger = logging.getLogger(__name__)
@@ -64,8 +64,9 @@ def ensure_index_ready(retries=0) -> Tuple:
         if os.path.exists("knowledge_full.md"):
             build("knowledge_full.md", retries=retries)
         else:
-            logger.error("knowledge_full.md not found")
-            sys.exit(1)
+            message = "knowledge_full.md not found"
+            logger.error(message)
+            raise IndexLoadError(message)
 
     result = load_index()
     if result is None:
@@ -74,12 +75,14 @@ def ensure_index_ready(retries=0) -> Tuple:
             build("knowledge_full.md", retries=retries)
             result = load_index()
         else:
-            logger.error("knowledge_full.md not found")
-            sys.exit(1)
+            message = "knowledge_full.md not found"
+            logger.error(message)
+            raise IndexLoadError(message)
 
     if result is None:
-        logger.error("Failed to load artifacts after rebuild")
-        sys.exit(1)
+        message = "Failed to load artifacts after rebuild"
+        logger.error(message)
+        raise IndexLoadError(message)
 
     # Handle both dict (from library) and tuple (from test mocks) for backward compatibility
     if isinstance(result, dict):
@@ -473,7 +476,11 @@ def handle_ask_command(args):
         print(f"⚠️  Request throttled. {wait_msg}")
         return
 
-    chunks, vecs_n, bm, hnsw = ensure_index_ready(retries=getattr(args, "retries", 0))
+    try:
+        chunks, vecs_n, bm, hnsw = ensure_index_ready(retries=getattr(args, "retries", 0))
+    except IndexLoadError as exc:
+        logger.error("Failed to load index: %s", exc)
+        sys.exit(getattr(exc, "exit_code", 1))
     try:
         call_start = time.time()
         result = answer_once(
@@ -614,15 +621,19 @@ def handle_chat_command(args):
             sys.exit(1)
 
     # Normal chat REPL
-    chat_repl(
-        top_k=args.topk,
-        pack_top=args.pack,
-        threshold=args.threshold,
-        use_rerank=args.rerank,
-        debug=args.debug,
-        seed=args.seed,
-        num_ctx=args.num_ctx,
-        num_predict=args.num_predict,
-        retries=getattr(args, "retries", 0),
-        use_json=getattr(args, "json", False)
-    )
+    try:
+        chat_repl(
+            top_k=args.topk,
+            pack_top=args.pack,
+            threshold=args.threshold,
+            use_rerank=args.rerank,
+            debug=args.debug,
+            seed=args.seed,
+            num_ctx=args.num_ctx,
+            num_predict=args.num_predict,
+            retries=getattr(args, "retries", 0),
+            use_json=getattr(args, "json", False)
+        )
+    except IndexLoadError as exc:
+        logger.error("Failed to load index: %s", exc)
+        sys.exit(getattr(exc, "exit_code", 1))
