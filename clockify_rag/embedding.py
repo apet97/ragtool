@@ -182,7 +182,7 @@ def embed_texts(texts: list, retries=0) -> np.ndarray:
 
     # Parallel batching mode (always enabled for internal deployment)
     # Priority #7: Cap outstanding futures to prevent socket exhaustion
-    logger.info(f"[Rank 10] Embedding {total} texts with {config.EMB_MAX_WORKERS} workers")
+    logger.debug(f"[Rank 10] Embedding {total} texts with {config.EMB_MAX_WORKERS} workers")
     results = [None] * total  # Pre-allocate to maintain order
     completed = 0
 
@@ -220,7 +220,7 @@ def embed_texts(texts: list, retries=0) -> np.ndarray:
 
                     # Log progress every 100 completions
                     if completed % 100 == 0 or completed == total:
-                        logger.info(f"  [{completed}/{total}]")
+                        logger.debug(f"  [{completed}/{total}]")
 
                 # Submit new tasks to fill slots (up to max_outstanding)
                 while len(pending_futures) < max_outstanding:
