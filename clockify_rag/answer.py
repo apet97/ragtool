@@ -38,6 +38,7 @@ from .retrieval import (
 )
 from .exceptions import LLMError
 from .confidence_routing import get_routing_action
+from .metrics import increment_counter, observe_histogram, MetricNames
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +332,7 @@ def answer_once(
         Dict with answer and metadata
     """
     t_start = time.time()
+    increment_counter(MetricNames.QUERIES_TOTAL)
 
     # Retrieve
     t0 = time.time()
@@ -340,9 +342,13 @@ def answer_once(
         faiss_index_path=faiss_index_path
     )
     retrieve_time = time.time() - t0
+    observe_histogram(MetricNames.RETRIEVAL_LATENCY, retrieve_time * 1000.0)
 
     # Check coverage
     if not coverage_ok(selected, scores["dense"], threshold):
+        total_ms = (time.time() - t_start) * 1000.0
+        observe_histogram(MetricNames.QUERY_LATENCY, total_ms)
+        increment_counter(MetricNames.REFUSALS_TOTAL, labels={"stage": "coverage"})
         return {
             "answer": REFUSAL_STR,
             "refused": True,
@@ -392,6 +398,13 @@ def answer_once(
     # Auto-escalate low-confidence queries to human review
     refused = (answer == REFUSAL_STR)
     routing = get_routing_action(confidence, refused=refused, critical=False)
+
+    observe_histogram(MetricNames.RERANK_LATENCY, rerank_time * 1000.0)
+    observe_histogram(MetricNames.LLM_LATENCY, llm_time * 1000.0)
+    observe_histogram(MetricNames.QUERY_LATENCY, total_time * 1000.0)
+
+    if refused:
+        increment_counter(MetricNames.REFUSALS_TOTAL, labels={"stage": "llm"})
 
     return {
         "answer": answer,
