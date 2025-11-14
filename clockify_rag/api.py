@@ -27,7 +27,7 @@ from . import config
 from .answer import answer_once
 from .cli import ensure_index_ready
 from .indexing import build
-from .utils import validate_ollama_url
+from .utils import validate_ollama_url, check_ollama_connectivity
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +231,7 @@ def create_app() -> FastAPI:
         # Check Ollama connectivity with short timeout
         ollama_ok = False
         try:
-            validate_ollama_url(config.RAG_OLLAMA_URL, timeout=2)
+            check_ollama_connectivity(config.RAG_OLLAMA_URL, timeout=2)
             ollama_ok = True
         except Exception as e:
             # Ollama connectivity failure is acceptable for health check

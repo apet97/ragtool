@@ -81,6 +81,7 @@ eval = [
 ]
 dev = [
     "black>=24.1.0",
+    "asgi-lifespan>=1.1.0",
     "httpx>=0.27.0,<0.28.0",
     "ipython>=8.20.0",
     "mypy>=1.13.0",

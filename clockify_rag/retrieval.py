@@ -9,6 +9,8 @@ This module contains all retrieval-related functionality:
 - Answer generation with LLM
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import math

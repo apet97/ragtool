@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
 import numpy as np
+import requests
 
 # Note: config will be imported at module level to avoid circular imports
 # For functions that need dynamic config access, we'll import inside functions
@@ -200,15 +201,15 @@ def validate_ollama_url(url: str) -> str:
     """Validate and normalize Ollama URL. Returns validated URL."""
     from urllib.parse import urlparse
     try:
-        parsed = urlparse(url)
-        if not parsed.scheme:
-            # Assume http if no scheme
-            url = "http://" + url
-            parsed = urlparse(url)
+        candidate = url.strip()
+        if "://" not in candidate:
+            candidate = "http://" + candidate
+
+        parsed = urlparse(candidate)
         if parsed.scheme not in ("http", "https"):
             raise ValueError(f"Invalid scheme: {parsed.scheme}. Must be http or https.")
         if not parsed.netloc:
-            raise ValueError(f"Invalid URL: {url}. Must include host.")
+            raise ValueError(f"Invalid URL: {candidate}. Must include host.")
         # Normalize: ensure no trailing slash
         url = f"{parsed.scheme}://{parsed.netloc}"
         if parsed.path and parsed.path != "/":
@@ -216,6 +217,30 @@ def validate_ollama_url(url: str) -> str:
         return url
     except Exception as e:
         raise ValueError(f"Invalid Ollama URL '{url}': {e}")
+
+
+def check_ollama_connectivity(url: str, timeout: float = 3.0) -> str:
+    """Validate the URL and perform a lightweight connectivity probe.
+
+    Args:
+        url: Ollama base URL or host[:port]
+        timeout: Request timeout in seconds
+
+    Returns:
+        Normalized URL (scheme + host[:port])
+
+    Raises:
+        RuntimeError: if the probe fails
+    """
+    normalized = validate_ollama_url(url)
+    probe_url = f"{normalized}/api/tags"
+    try:
+        response = requests.get(probe_url, timeout=timeout)
+        response.raise_for_status()
+        logger.debug("Ollama connectivity OK: %s", probe_url)
+        return normalized
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(f"Failed to connect to Ollama at {normalized}: {exc}") from exc
 
 
 def validate_and_set_config(ollama_url=None, gen_model=None, emb_model=None, ctx_budget=None, emb_backend=None, ann_backend=None, alpha_hybrid=None, top_k=None, pack_top=None, threshold=None, seed=None, num_ctx=None, num_predict=None, retries=None, faiss_multiplier=None):

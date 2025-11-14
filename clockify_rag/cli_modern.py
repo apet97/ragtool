@@ -27,7 +27,7 @@ from .caching import get_query_cache
 from .cli import ensure_index_ready, chat_repl
 from .embedding import _load_st_encoder
 from .indexing import build, load_index
-from .utils import check_pytorch_mps, validate_ollama_url
+from .utils import check_pytorch_mps, validate_ollama_url, check_ollama_connectivity
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -177,10 +177,10 @@ def doctor(
 
         # Check Ollama connectivity
         try:
-            validate_ollama_url(config.RAG_OLLAMA_URL, timeout=3)
-            output["ollama"] = {"connected": True, "error": None}
+            normalized = check_ollama_connectivity(config.RAG_OLLAMA_URL, timeout=3)
+            output["ollama"] = {"connected": True, "endpoint": normalized, "error": None}
         except Exception as e:
-            output["ollama"] = {"connected": False, "error": str(e)}
+            output["ollama"] = {"connected": False, "endpoint": config.RAG_OLLAMA_URL, "error": str(e)}
 
         console.print(json.dumps(output, indent=2))
         return
@@ -235,8 +235,8 @@ def doctor(
 
     # Ollama Connectivity
     try:
-        validate_ollama_url(config.RAG_OLLAMA_URL, timeout=3)
-        console.print(f"✅ Ollama: Connected to {config.RAG_OLLAMA_URL}")
+        normalized = check_ollama_connectivity(config.RAG_OLLAMA_URL, timeout=3)
+        console.print(f"✅ Ollama: Connected to {normalized}")
     except Exception as e:
         console.print(f"❌ Ollama: Connection failed - {e}")
     console.print()

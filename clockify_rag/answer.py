@@ -10,6 +10,8 @@ This module contains the complete answer generation pipeline:
 - Complete answer_once workflow
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import logging
