@@ -765,7 +765,8 @@ def chat_completion(
     model: Optional[str] = None,
     options: Optional[ChatCompletionOptions] = None,
     stream: bool = False,
-    timeout: Optional[tuple] = None
+    timeout: Optional[tuple] = None,
+    retries: Optional[int] = None,
 ) -> ChatCompletionResponse:
     """Global function to make chat completion requests.
     
@@ -775,6 +776,7 @@ def chat_completion(
         options: Generation options
         stream: Whether to stream the response
         timeout: (connect, read) timeout tuple
+        retries: Number of retries for this request
         
     Returns:
         Chat completion response
@@ -785,7 +787,8 @@ def chat_completion(
         model=model,
         options=options,
         stream=stream,
-        timeout=timeout
+        timeout=timeout,
+        retries=retries,
     )
 
 
