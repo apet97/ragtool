@@ -16,6 +16,11 @@ class LLMUnavailableError(LLMError):
     pass
 
 
+class LLMBadResponseError(LLMError):
+    """LLM returned a malformed or incomplete payload."""
+    pass
+
+
 class IndexLoadError(Exception):
     """Index loading or validation failed."""
     pass

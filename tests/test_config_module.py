@@ -9,6 +9,7 @@ from typing import Optional
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "clockify_rag" / "config.py"
 CONFIG_ENV_KEYS = [
     "RAG_OLLAMA_URL",
+    "RAG_LLM_CLIENT",
     "OLLAMA_URL",
     "RAG_CHAT_MODEL",
     "GEN_MODEL",
@@ -56,6 +57,11 @@ CONFIG_ENV_KEYS = [
     "NLTK_AUTO_DOWNLOAD",
     "CLOCKIFY_QUERY_EXPANSIONS",
     "MAX_QUERY_EXPANSION_FILE_SIZE",
+    "API_AUTH_MODE",
+    "API_ALLOWED_KEYS",
+    "API_KEY_HEADER",
+    "ALLOW_PROXIES",
+    "USE_PROXY",
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "BUILD_LOCK_TTL_SEC",
@@ -141,3 +147,51 @@ def test_invalid_numeric_values_are_clamped(monkeypatch: pytest.MonkeyPatch):
     assert cfg.BM25_K1 == 0.1  # clamped minimum
     assert cfg.FAISS_CANDIDATE_MULTIPLIER == 10  # clamped maximum
     assert cfg.DEFAULT_THRESHOLD == 0.25  # fallback to default on parse failure
+
+
+def test_llm_client_helper_tracks_runtime_env(monkeypatch: pytest.MonkeyPatch):
+    cfg = _load_config_module(monkeypatch)
+    # With env unset we fall back to provided default
+    assert cfg.get_llm_client_mode(default="mock") == "mock"
+
+    # Changing the environment after import updates the helper on next call
+    monkeypatch.setenv("RAG_LLM_CLIENT", "Test")
+    assert cfg.get_llm_client_mode() == "test"
+
+    settings = cfg.current_llm_settings(default_client_mode="mock")
+    assert settings.base_url == cfg.RAG_OLLAMA_URL
+    assert settings.client_mode == "test"
+
+
+def test_proxy_toggle_honors_legacy_alias(monkeypatch: pytest.MonkeyPatch):
+    cfg = _load_config_module(monkeypatch, {"USE_PROXY": "1"})
+    assert cfg.ALLOW_PROXIES is True
+
+    cfg = _load_config_module(monkeypatch, {"ALLOW_PROXIES": "0"})
+    assert cfg.ALLOW_PROXIES is False
+
+
+def test_api_key_configuration_parses_csv(monkeypatch: pytest.MonkeyPatch):
+    cfg = _load_config_module(
+        monkeypatch,
+        {
+            "API_AUTH_MODE": "API_KEY",
+            "API_ALLOWED_KEYS": "alpha,  beta , ,gamma",
+            "API_KEY_HEADER": "X-Secret",
+        },
+    )
+    assert cfg.API_AUTH_MODE == "api_key"
+    assert cfg.API_ALLOWED_KEYS == frozenset({"alpha", "beta", "gamma"})
+    assert cfg.API_KEY_HEADER == "X-Secret"
+
+
+def test_blank_strings_are_treated_as_missing(monkeypatch: pytest.MonkeyPatch):
+    cfg = _load_config_module(
+        monkeypatch,
+        {
+            "CLOCKIFY_QUERY_EXPANSIONS": "   ",
+            "HTTP_PROXY": "",
+        },
+    )
+    assert cfg.CLOCKIFY_QUERY_EXPANSIONS is None
+    assert cfg.HTTP_PROXY == ""

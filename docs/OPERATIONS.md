@@ -24,9 +24,9 @@ This guide documents how to operate the Clockify RAG stack once it has been inst
 2. **Corporate VPN / remote Ollama**
    - Default `RAG_OLLAMA_URL=http://10.127.0.192:11434`.
    - Increase `CHAT_READ_TIMEOUT`/`EMB_READ_TIMEOUT` and `DEFAULT_RETRIES` for higher latency links.
-   - Always run `ragctl doctor --json` and `scripts/smoke_rag.py --client ollama` before exposing the API.
+   - Always run `ragctl doctor --json` and `SMOKE_CLIENT=ollama make smoke` (or `python3 scripts/smoke_rag.py --client ollama`) before exposing the API.
 3. **CI / automation**
-   - Run `RAG_LLM_CLIENT=mock make smoke` to validate artifacts without calling the remote host.
+   - Run `make smoke` (defaults to `--client mock`) to validate artifacts without calling the remote host.
    - Cache `chunks.jsonl`, `vecs_n.npy`, and `bm25.json` between runs to avoid rebuilding for every pipeline.
 
 ## Routine Operations
@@ -73,7 +73,7 @@ Both targets eventually call `ragctl ingest`, which enforces a build lock (`.bui
 
 1. Update `knowledge_full.md` (or the directory passed to `ragctl ingest --input`).
 2. Execute `make reindex` to delete stale artifacts, rebuild chunks/embeddings/FAISS + BM25, and regenerate metadata (`index.meta.json`).
-3. Run `make smoke` (mock) followed by `RAG_LLM_CLIENT=ollama make smoke` if the remote model is reachable.
+3. Run `make smoke` (mock) followed by `SMOKE_CLIENT=ollama make smoke` if the remote model is reachable.
 4. Redeploy or restart any running API servers to pick up the refreshed artifacts.
 
 ## Failure Modes & Debugging
@@ -98,15 +98,15 @@ When in doubt, enable debug logging temporarily (`python3 clockify_support_cli_f
 
 ### Smoke test script
 
-`scripts/smoke_rag.py` now defaults to the mock LLM client so it can run in CI/offline settings safely.  Override with `--client ollama` (or `RAG_LLM_CLIENT=ollama`) to exercise the real endpoint:
+`scripts/smoke_rag.py` now defaults to the mock LLM client so it can run in CI/offline settings safely.  Override with `SMOKE_CLIENT=ollama make smoke` or `python3 scripts/smoke_rag.py --client ollama` to exercise the real endpoint:
 
 ```bash
 # Offline/CI
 make smoke
 
 # Full stack
-RAG_LLM_CLIENT=ollama make smoke
-# or
+SMOKE_CLIENT=ollama make smoke
+# or call the script directly
 python scripts/smoke_rag.py --client ollama --question "How do I track time?"
 ```
 

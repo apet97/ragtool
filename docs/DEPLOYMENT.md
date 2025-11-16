@@ -41,11 +41,11 @@ The Clockify RAG stack is designed to run on both Apple Silicon laptops (for loc
 4. **Run a smoke test**
    ```bash
    # Offline (mock client)
-   RAG_LLM_CLIENT=mock make smoke
+   make smoke
 
    # Against the remote Ollama host (VPN required)
    RAG_OLLAMA_URL=http://10.127.0.192:11434 \
-   RAG_LLM_CLIENT=ollama make smoke
+   SMOKE_CLIENT=ollama make smoke
    ```
    The `make smoke` target now invokes `scripts/smoke_rag.py`, which loads the local index, calls `answer_once`, and reports routing + timing stats. Non-zero exit codes indicate an unhealthy deployment.
 

@@ -7,11 +7,10 @@ Ollama-style APIs for both chat completion and embedding generation.
 import hashlib
 import logging
 import math
-import os
 import random
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 from typing_extensions import TypedDict
 
 import requests
@@ -32,9 +31,10 @@ from .config import (
     DEFAULT_SEED,
     DEFAULT_NUM_CTX,
     DEFAULT_NUM_PREDICT,
-    ALLOW_PROXIES
+    ALLOW_PROXIES,
+    get_llm_client_mode,
 )
-from .exceptions import LLMError, EmbeddingError, LLMUnavailableError
+from .exceptions import LLMError, EmbeddingError, LLMUnavailableError, LLMBadResponseError
 from .http_utils import get_session
 
 
@@ -197,6 +197,18 @@ class OllamaAPIClient(BaseLLMClient):
         # Set up session with proper proxy configuration
         self.session = get_session(retries=self.retries)
         self.session.trust_env = ALLOW_PROXIES
+        self._chat_endpoint = f"{self.base_url.rstrip('/')}/api/chat"
+        self._emb_endpoint = f"{self.base_url.rstrip('/')}/api/embeddings"
+
+    def _get_session(self, retries: int) -> requests.Session:
+        """Return a requests.Session configured for the desired retry count."""
+
+        if retries == self.retries:
+            return self.session
+
+        session = get_session(retries=retries)
+        session.trust_env = ALLOW_PROXIES
+        return session
 
     def chat_completion(
         self,
@@ -243,49 +255,70 @@ class OllamaAPIClient(BaseLLMClient):
         
         req_timeout = timeout or (self.chat_connect_timeout, self.chat_read_timeout)
         req_retries = retries or self.retries
-        
-        # Get session with appropriate retry settings for this request
-        session = get_session(retries=req_retries)
-        session.trust_env = ALLOW_PROXIES
-        
-        logger.debug(f"Making chat completion request to {self.base_url}/api/chat with model {model}")
+        session = self._get_session(req_retries)
         start_time = time.time()
         response = None
         
         try:
             response = session.post(
-                f"{self.base_url}/api/chat",
+                self._chat_endpoint,
                 json=payload,
                 timeout=req_timeout,
                 allow_redirects=False
             )
             response.raise_for_status()
-            
             result = response.json()
-            self._validate_chat_response(result, model)
-            
-            # Log performance metrics
-            duration = time.time() - start_time
-            logger.debug(f"Chat completion completed in {duration:.2f}s for model {model}")
-            
-            return result
-            
         except requests.exceptions.Timeout as e:
-            logger.error(f"Chat completion timeout after {req_timeout[1]}s: {e}")
-            raise LLMUnavailableError(f"Chat completion timeout: {e}") from e
+            logger.error(
+                "Chat completion timeout (read %.1fs) model=%s host=%s: %s",
+                req_timeout[1],
+                model,
+                self.base_url,
+                e,
+            )
+            raise LLMUnavailableError(f"Chat completion timeout for model {model}") from e
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"Chat completion connection error: {e}")
-            raise LLMUnavailableError(f"Chat completion connection error: {e}") from e
+            logger.error(
+                "Chat completion connection error model=%s host=%s: %s",
+                model,
+                self.base_url,
+                e,
+            )
+            raise LLMUnavailableError(f"Chat completion connection error for model {model}") from e
         except requests.exceptions.HTTPError as e:
             status = getattr(e.response, "status_code", getattr(response, "status_code", "unknown"))
-            logger.error(f"Chat completion HTTP error: {e} (status {status})")
-            raise LLMError(f"Chat completion HTTP error: {e}") from e
+            logger.error(
+                "Chat completion HTTP error model=%s host=%s status=%s: %s",
+                model,
+                self.base_url,
+                status,
+                e,
+            )
+            raise LLMError(f"Chat completion HTTP error (status {status})") from e
+        except ValueError as e:
+            logger.error(
+                "Chat completion invalid JSON model=%s host=%s: %s",
+                model,
+                self.base_url,
+                e,
+            )
+            raise LLMBadResponseError(f"Chat completion returned invalid JSON for model {model}") from e
         except requests.exceptions.RequestException as e:
-            logger.error(f"Chat completion request error: {e}")
+            logger.error(
+                "Chat completion request error model=%s host=%s: %s",
+                model,
+                self.base_url,
+                e,
+            )
             raise LLMError(f"Chat completion request error: {e}") from e
         except Exception as e:
-            logger.error(f"Chat completion unexpected error: {e}")
+            logger.error("Chat completion unexpected error model=%s: %s", model, e)
             raise LLMError(f"Chat completion unexpected error: {e}") from e
+        
+        validated = self._validate_chat_response(result, model)
+        duration = time.time() - start_time
+        logger.debug("Chat completion finished in %.2fs model=%s", duration, model)
+        return validated
 
     def generate_text(
         self,
@@ -359,8 +392,7 @@ class OllamaAPIClient(BaseLLMClient):
         req_retries = retries or self.retries
         
         # Get session with appropriate retry settings for this request
-        session = get_session(retries=req_retries)
-        session.trust_env = ALLOW_PROXIES
+        session = self._get_session(req_retries)
         response = None
         
         payload: EmbeddingRequest = {
@@ -373,43 +405,63 @@ class OllamaAPIClient(BaseLLMClient):
         
         try:
             response = session.post(
-                f"{self.base_url}/api/embeddings",
+                self._emb_endpoint,
                 json=payload,
                 timeout=req_timeout,
                 allow_redirects=False
             )
             response.raise_for_status()
-            
             result = response.json()
-            
-            # Validate the response
-            embedding = result.get("embedding")
-            if not embedding or not isinstance(embedding, list) or len(embedding) == 0:
-                raise EmbeddingError(f"Invalid embedding response: {result}")
-            if not all(isinstance(v, (int, float)) for v in embedding):
-                raise EmbeddingError(f"Embedding contains non-numeric values: {result}")
-            
-            # Log performance metrics
+            embedding = self._validate_embedding_response(result)
             duration = time.time() - start_time
-            logger.debug(f"Embedding created in {duration:.2f}s for model {model}, dim={len(embedding)}")
-            
+            logger.debug("Embedding created in %.2fs for model %s dim=%d", duration, model, len(embedding))
             return embedding
             
         except requests.exceptions.Timeout as e:
-            logger.error(f"Embedding creation timeout after {req_timeout[1]}s: {e}")
-            raise EmbeddingError(f"Embedding creation timeout: {e}") from e
+            logger.error(
+                "Embedding creation timeout (read %.1fs) model=%s host=%s: %s",
+                req_timeout[1],
+                model,
+                self.base_url,
+                e,
+            )
+            raise EmbeddingError(f"Embedding creation timeout for model {model}") from e
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"Embedding creation connection error: {e}")
-            raise EmbeddingError(f"Embedding creation connection error: {e}") from e
+            logger.error(
+                "Embedding creation connection error model=%s host=%s: %s",
+                model,
+                self.base_url,
+                e,
+            )
+            raise EmbeddingError(f"Embedding creation connection error for model {model}") from e
         except requests.exceptions.HTTPError as e:
             status = getattr(e.response, "status_code", getattr(response, "status_code", "unknown"))
-            logger.error(f"Embedding creation HTTP error: {e} (status {status})")
-            raise EmbeddingError(f"Embedding creation HTTP error: {e}") from e
+            logger.error(
+                "Embedding creation HTTP error model=%s host=%s status=%s: %s",
+                model,
+                self.base_url,
+                status,
+                e,
+            )
+            raise EmbeddingError(f"Embedding creation HTTP error (status {status})") from e
+        except ValueError as e:
+            logger.error(
+                "Embedding creation invalid JSON model=%s host=%s: %s",
+                model,
+                self.base_url,
+                e,
+            )
+            raise EmbeddingError(f"Embedding creation returned invalid JSON for model {model}") from e
         except requests.exceptions.RequestException as e:
-            logger.error(f"Embedding creation request error: {e}")
+            logger.error(
+                "Embedding creation request error model=%s host=%s: %s",
+                model,
+                self.base_url,
+                e,
+            )
             raise EmbeddingError(f"Embedding creation request error: {e}") from e
         except Exception as e:
-            logger.error(f"Embedding creation unexpected error: {e}")
+            logger.error("Embedding creation unexpected error model=%s: %s", model, e)
             raise EmbeddingError(f"Embedding creation unexpected error: {e}") from e
 
     def create_embeddings_batch(
@@ -449,16 +501,52 @@ class OllamaAPIClient(BaseLLMClient):
         return embeddings
 
     @staticmethod
-    def _validate_chat_response(result: Dict[str, Any], model: str) -> None:
+    def _validate_chat_response(result: Dict[str, Any], model: str) -> ChatCompletionResponse:
         """Ensure chat responses contain textual assistant content."""
         if not isinstance(result, dict):
-            raise LLMError(f"Chat completion returned non-object payload for model {model}")
+            raise LLMBadResponseError(f"Chat completion returned non-object payload for model {model}")
+
+        result_model = result.get("model")
+        if not isinstance(result_model, str) or not result_model.strip():
+            raise LLMBadResponseError(f"Chat completion missing model name for model {model}")
+
         message = result.get("message")
         if not isinstance(message, dict):
-            raise LLMError(f"Chat completion missing 'message' block for model {model}")
+            raise LLMBadResponseError(f"Chat completion missing 'message' block for model {model}")
+
+        role = message.get("role")
+        if not isinstance(role, str) or not role.strip():
+            raise LLMBadResponseError(f"Chat completion missing message role for model {model}")
+
         content = message.get("content")
-        if not isinstance(content, str):
-            raise LLMError(f"Chat completion missing textual content for model {model}")
+        if not isinstance(content, str) or not content.strip():
+            raise LLMBadResponseError(f"Chat completion missing textual content for model {model}")
+
+        return cast(ChatCompletionResponse, result)
+
+    @staticmethod
+    def _validate_embedding_response(result: Dict[str, Any]) -> List[float]:
+        """Ensure embedding responses return numeric vectors of the expected size."""
+
+        if not isinstance(result, dict):
+            raise EmbeddingError("Embedding response must be a JSON object.")
+
+        embedding = result.get("embedding")
+        if not isinstance(embedding, list) or not embedding:
+            raise EmbeddingError("Embedding response missing 'embedding' list.")
+
+        try:
+            vector = [float(value) for value in embedding]
+        except (TypeError, ValueError) as exc:
+            raise EmbeddingError("Embedding response contained non-numeric values.") from exc
+
+        expected_dim = EMB_DIM_OLLAMA if EMB_BACKEND == "ollama" else EMB_DIM_LOCAL
+        if len(vector) != expected_dim:
+            raise EmbeddingError(
+                f"Embedding dimension mismatch (expected {expected_dim}, got {len(vector)})"
+            )
+
+        return vector
 
     def list_models(self) -> List[ModelInfo]:
         """List available models on the server.
@@ -663,8 +751,7 @@ def get_llm_client() -> BaseLLMClient:
     global _LLM_CLIENT
     if _LLM_CLIENT is not None:
         return _LLM_CLIENT
-
-    client_pref = os.environ.get("RAG_LLM_CLIENT", "").lower()
+    client_pref = get_llm_client_mode()
     if client_pref in {"mock", "test"}:
         logger.info("Using MockLLMClient (RAG_LLM_CLIENT=%s)", client_pref or "mock")
         _LLM_CLIENT = MockLLMClient()

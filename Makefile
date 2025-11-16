@@ -1,4 +1,4 @@
-.PHONY: help venv install deps-check selftest build chat smoke smoke-full clean dev test eval benchmark benchmark-quick typecheck lint format pre-commit-install pre-commit-run regen-artifacts rebuild-all
+.PHONY: help venv install deps-check selftest build chat smoke smoke-full clean dev test eval benchmark benchmark-quick typecheck lint format pre-commit-install pre-commit-run regen-artifacts rebuild-all test-quick verify
 
 help:
 	@echo "v4.1 Clockify RAG CLI - Make Targets"
@@ -15,6 +15,8 @@ help:
 	@echo "  make selftest            - Run self-test suite"
 	@echo "  make chat                - Start interactive chat (REPL)"
 	@echo "  make smoke               - Run full smoke test suite"
+	@echo "  make test-quick          - Fast unit tests (config/API client/answer core)"
+	@echo "  make verify              - pip check + make test-quick + make smoke"
 	@echo "  make test                - Run unit tests with coverage"
 	@echo "  make eval                - Run RAG evaluation on ground truth dataset"
 	@echo "  make benchmark           - Run performance benchmarks (latency, throughput, memory)"
@@ -56,6 +58,11 @@ deps-check:
 	source rag_env/bin/activate && python -m pip check
 	source rag_env/bin/activate && python -m pytest tests/test_api_client.py tests/test_config_module.py
 	@echo "✅ Dependency check suite passed"
+
+.PHONY: test-quick
+test-quick:
+	@echo "Running quick verification tests..."
+	python3 -m pytest tests/test_config_module.py tests/test_api_client.py tests/test_answer.py
 
 .PHONY: freeze
 freeze:
@@ -122,9 +129,23 @@ chat:
 	@echo "Starting interactive chat (REPL)..."
 	source rag_env/bin/activate && python3 clockify_support_cli_final.py chat
 
+SMOKE_CLIENT ?= mock
+
+.PHONY: smoke
 smoke:
-	@echo "Running lightweight smoke test (mock LLM by default)..."
-	python3 scripts/smoke_rag.py $(SMOKE_ARGS)
+	@echo "Running lightweight smoke test (SMOKE_CLIENT=$(SMOKE_CLIENT))..."
+	python3 scripts/smoke_rag.py --client $(SMOKE_CLIENT) $(SMOKE_ARGS)
+
+.PHONY: verify
+verify:
+	@echo "Running verification gate (pip check + test-quick + smoke)..."
+	@if [ ! -d rag_env ]; then \
+		echo "❌ rag_env not found. Run 'make dev' first."; \
+		exit 1; \
+	fi
+	source rag_env/bin/activate && python -m pip check
+	$(MAKE) test-quick
+	$(MAKE) smoke
 
 .PHONY: smoke-full
 smoke-full:

@@ -124,12 +124,12 @@ make deps-check
 
 # Full stack against the VPN-hosted Ollama server
 RAG_OLLAMA_URL=http://10.127.0.192:11434 \
-RAG_LLM_CLIENT=ollama make smoke
-# or
+SMOKE_CLIENT=ollama make smoke
+# or run the script directly
 python3 scripts/smoke_rag.py --client ollama --question "How do I track time?"
 ```
 
-`make smoke` wraps `scripts/smoke_rag.py`, which now defaults to the deterministic mock LLM client so CI/laptops stay offline. Pass `--client ollama` (or export `RAG_LLM_CLIENT=ollama`) to hit the real endpoint. The script loads the local index, runs `answer_once`, and prints routing + latency stats; non-zero exit codes indicate refusal/error so you can fail fast before exposing the API. `make deps-check` is a lightweight dependency health gate (`pip check` + `pytest tests/test_api_client.py tests/test_config_module.py`) that should stay green on every workstation. See [VERIFICATION.md](VERIFICATION.md) for the full validation script.
+`make smoke` wraps `scripts/smoke_rag.py`, which now defaults to the deterministic mock LLM client so CI/laptops stay offline. Override with `SMOKE_CLIENT=ollama make smoke` (or run `python3 scripts/smoke_rag.py --client ollama ...`) to exercise the real endpoint when VPN reachability is available. The script loads the local index, runs `answer_once`, and prints routing + latency stats; non-zero exit codes indicate refusal/error so you can fail fast before exposing the API. `make deps-check` is a lightweight dependency health gate (`pip check` + targeted pytest). For a single command that runs `pip check`, the quick pytest subset, and the smoke test, use `make verify`. See [VERIFICATION.md](VERIFICATION.md) for the full validation script.
 
 ## What's New in v4.1.2
 

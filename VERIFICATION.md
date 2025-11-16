@@ -27,9 +27,10 @@ Use this checklist whenever you provision a fresh environment (laptop, CI runner
     python -m pip check
     python -m pip list | grep -E 'clockify-rag|torch|faiss|sentence-transformers'
     ```
-4. **Makefile gate (`make deps-check`)** – runs `pip check` plus the fast pytest subset (`tests/test_api_client.py` + `tests/test_config_module.py`). This must pass on every workstation before you ingest or smoke test:
+4. **Makefile gates** – keep `make deps-check` green (pip check + targeted pytest) and use `make test-quick` when you only need the pytest subset:
     ```bash
-    make deps-check
+    make deps-check    # pip check + targeted pytest
+    make test-quick    # pytest subset only
     ```
 5. **Configuration doctor** – validates Python version, FAISS/BM25 artifacts, and Ollama connectivity:
     ```bash
@@ -39,7 +40,12 @@ Use this checklist whenever you provision a fresh environment (laptop, CI runner
 6. **Smoke test retrieval** – defaults to the deterministic mock client so it is safe offline:
     ```bash
     make smoke
-    RAG_LLM_CLIENT=ollama make smoke   # optional, VPN-only
+    SMOKE_CLIENT=ollama make smoke   # optional, VPN-only
+    ```
+7. **One-shot verification** – combine `pip check`, the quick pytest subset, and the smoke harness in one command:
+    ```bash
+    make verify
+    SMOKE_CLIENT=ollama make verify   # run the same gate against the real endpoint
     ```
 
 ## 2. Docker Image Verification
@@ -61,7 +67,7 @@ Use this checklist whenever you provision a fresh environment (laptop, CI runner
       clockify-rag ragctl doctor --json
 
     docker run --rm \
-      -e RAG_LLM_CLIENT=mock \
+      -e SMOKE_CLIENT=mock \
       -v $(pwd):/app \
       clockify-rag make smoke
     ```
@@ -76,10 +82,10 @@ Use this checklist whenever you provision a fresh environment (laptop, CI runner
 Before promoting a build or cutting a release:
 
 - ✅ `pip check` (inside and outside Docker).
-- ✅ `make deps-check`.
+- ✅ `make deps-check` (or `make test-quick` when you only need the pytest subset).
+- ✅ `make verify` (runs `pip check`, the quick pytest subset, and `make smoke` in mock mode). Re-run with `SMOKE_CLIENT=ollama make verify` before a VPN-backed deploy.
 - ✅ `ragctl doctor --json` reports `index_ready=true` and `ollama.connected=true`.
-- ✅ `make smoke` (mock) and `RAG_LLM_CLIENT=ollama make smoke` if VPN reachability is required.
-- ✅ `python -m pytest tests/test_api_client.py tests/test_config_module.py`.
+- ✅ `make smoke` (mock) and `SMOKE_CLIENT=ollama make smoke` if VPN reachability is required.
 - ✅ `python -m pip list | grep faiss` to confirm FAISS is correctly installed (install via conda on macOS arm64 before running pip).
 
 Document the command outputs (or save JSON) in your deployment runbook so the next operator can reproduce the verification quickly.

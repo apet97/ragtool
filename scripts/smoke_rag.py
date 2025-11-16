@@ -19,6 +19,7 @@ from clockify_rag import config
 
 def run_smoke_test(question: str, top_k: int, pack_top: int, threshold: float, retries: int, client_mode: str) -> int:
     """Execute the smoke test and return an exit code."""
+    llm_settings = config.current_llm_settings(default_client_mode=client_mode)
     index = load_index()
     if index is None:
         print("❌ Index artifacts not found. Run `make build` or `ragctl ingest` first.")
@@ -49,11 +50,12 @@ def run_smoke_test(question: str, top_k: int, pack_top: int, threshold: float, r
     selected = result.get("selected_chunks", [])
     metadata = result.get("metadata", {})
 
-    endpoint = config.RAG_OLLAMA_URL
     print("============== SMOKE TEST ==============")
     print(f"Question:      {question}")
-    print(f"Ollama URL:    {endpoint}")
+    print(f"Ollama URL:    {llm_settings.base_url}")
     print(f"LLM client:    {client_mode}")
+    print(f"Chat model:    {llm_settings.chat_model}")
+    print(f"Embed model:   {llm_settings.embed_model}")
     print(f"Top-k / Pack:  {top_k} / {pack_top}")
     print("----------------------------------------")
     print(f"Answer:        {answer}")
@@ -87,7 +89,7 @@ def run_smoke_test(question: str, top_k: int, pack_top: int, threshold: float, r
 
 def _configure_llm_client(preferred_client: Optional[str]) -> str:
     """Set RAG_LLM_CLIENT to the desired mode (default mock) and return it."""
-    env_mode = os.environ.get("RAG_LLM_CLIENT")
+    env_mode = config.get_llm_client_mode()
     if preferred_client:
         mode = preferred_client
     elif env_mode:

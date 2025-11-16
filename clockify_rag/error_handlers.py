@@ -11,7 +11,13 @@ from typing import Any, Dict, Optional, Tuple, Union
 from functools import wraps
 
 from .exceptions import LLMError, EmbeddingError, IndexLoadError, BuildError, ValidationError
-from .config import RAG_OLLAMA_URL, RAG_CHAT_MODEL, RAG_EMBED_MODEL
+from .config import (
+    RAG_OLLAMA_URL,
+    RAG_CHAT_MODEL,
+    RAG_EMBED_MODEL,
+    DEFAULT_RAG_OLLAMA_URL,
+    DEFAULT_LOCAL_OLLAMA_URL,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -111,9 +117,11 @@ def validate_configuration() -> Tuple[bool, str]:
     try:
         # Validate RAG_OLLAMA_URL format
         if not RAG_OLLAMA_URL or not isinstance(RAG_OLLAMA_URL, str):
-            return False, format_error_message("CONFIG_ERROR", 
-                                            f"RAG_OLLAMA_URL must be a string, got {type(RAG_OLLAMA_URL)}", 
-                                            "set RAG_OLLAMA_URL=http://127.0.0.1:11434")
+            return False, format_error_message(
+                "CONFIG_ERROR",
+                f"RAG_OLLAMA_URL must be a string, got {type(RAG_OLLAMA_URL)}",
+                f"set RAG_OLLAMA_URL={DEFAULT_RAG_OLLAMA_URL} (or {DEFAULT_LOCAL_OLLAMA_URL} for local Ollama)",
+            )
         
         # Validate model names
         if not RAG_CHAT_MODEL or not isinstance(RAG_CHAT_MODEL, str):

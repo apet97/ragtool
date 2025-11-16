@@ -2,6 +2,7 @@
 
 import logging
 import os
+from dataclasses import dataclass
 from typing import Iterable, Optional
 
 # FIX (Error #13): Helper functions for safe environment variable parsing
@@ -107,8 +108,27 @@ def _parse_env_int(key: str, default: int, min_val: int = None, max_val: int = N
     return parsed
 
 
+def _get_bool_env(var_name: str, default: str = "1", legacy_keys: Optional[Iterable[str]] = None) -> bool:
+    """Read a boolean environment variable with optional legacy aliases."""
+
+    keys = [var_name]
+    if legacy_keys:
+        keys.extend(legacy_keys)
+
+    for key in keys:
+        if key in os.environ:
+            value = os.environ[key]
+            break
+    else:
+        value = default
+
+    return value.lower() not in {"0", "false", "no", "off", ""}
+
+
 # ====== OLLAMA CONFIG ======
 _DEFAULT_RAG_OLLAMA_URL = "http://10.127.0.192:11434"
+DEFAULT_RAG_OLLAMA_URL = _DEFAULT_RAG_OLLAMA_URL
+DEFAULT_LOCAL_OLLAMA_URL = "http://127.0.0.1:11434"
 
 RAG_OLLAMA_URL = _get_env_value(
     "RAG_OLLAMA_URL",
@@ -125,6 +145,41 @@ RAG_EMBED_MODEL = _get_env_value(
     default="nomic-embed-text:latest",
     legacy_keys=("EMB_MODEL", "EMBED_MODEL"),
 )
+
+_INITIAL_RAG_LLM_CLIENT = _get_env_value("RAG_LLM_CLIENT", default="")
+
+
+@dataclass(frozen=True)
+class LLMSettings:
+    """Typed snapshot of the current LLM configuration."""
+
+    base_url: str
+    chat_model: str
+    embed_model: str
+    client_mode: str
+
+
+def get_llm_client_mode(default: str = "") -> str:
+    """Return the preferred LLM client mode (`mock`, `ollama`, etc.)."""
+
+    raw_value = os.environ.get("RAG_LLM_CLIENT")
+    if raw_value is None:
+        raw_value = _INITIAL_RAG_LLM_CLIENT
+    normalized = (raw_value or "").strip().lower()
+    if not normalized:
+        return default.strip().lower()
+    return normalized
+
+
+def current_llm_settings(default_client_mode: str = "") -> LLMSettings:
+    """Return a dataclass capturing the current Ollama + model configuration."""
+
+    return LLMSettings(
+        base_url=RAG_OLLAMA_URL,
+        chat_model=RAG_CHAT_MODEL,
+        embed_model=RAG_EMBED_MODEL,
+        client_mode=get_llm_client_mode(default_client_mode),
+    )
 
 # Backwards-compatible aliases (legacy code/tests expect these names)
 OLLAMA_URL = RAG_OLLAMA_URL
@@ -180,7 +235,7 @@ MMR_LAMBDA = _parse_env_float("MMR_LAMBDA", 0.75, min_val=0.0, max_val=1.0)  # W
 CTX_TOKEN_BUDGET = _parse_env_int("CTX_BUDGET", 12000, min_val=100, max_val=100000)  # Was 6000, now 12000
 
 # ====== EMBEDDINGS BACKEND (v4.1) ======
-EMB_BACKEND = os.environ.get("EMB_BACKEND", "local")  # "local" or "ollama"
+EMB_BACKEND = (_get_env_value("EMB_BACKEND", "local") or "local").lower()  # "local" or "ollama"
 
 # Embedding dimensions:
 # - local (SentenceTransformer all-MiniLM-L6-v2): 384-dim
@@ -190,7 +245,7 @@ EMB_DIM_OLLAMA = 768
 EMB_DIM = EMB_DIM_LOCAL if EMB_BACKEND == "local" else EMB_DIM_OLLAMA
 
 # ====== ANN (Approximate Nearest Neighbors) (v4.1) ======
-USE_ANN = os.environ.get("ANN", "faiss")  # "faiss" or "none"
+USE_ANN = (_get_env_value("ANN", "faiss") or "faiss").lower()  # "faiss" or "none"
 # Note: nlist reduced from 256→64 for arm64 macOS stability (avoid IVF training segfault)
 # FIX (Error #13): Use safe env var parsing
 ANN_NLIST = _parse_env_int("ANN_NLIST", 64, min_val=8, max_val=1024)  # IVF clusters (reduced for stability)
@@ -208,7 +263,7 @@ ALPHA_HYBRID = _parse_env_float("ALPHA", 0.5, min_val=0.0, max_val=1.0)  # 0.5 =
 # - Pricing: 0.70 (high BM25 for exact pricing terms)
 # - Troubleshooting: 0.60 (favor BM25 for error messages)
 # - General: 0.50 (balanced, same as ALPHA_HYBRID)
-USE_INTENT_CLASSIFICATION = os.environ.get("USE_INTENT_CLASSIFICATION", "1").lower() in ("1", "true", "yes")
+USE_INTENT_CLASSIFICATION = _get_bool_env("USE_INTENT_CLASSIFICATION", "1")
 
 # ====== KPI TIMINGS (v4.1) ======
 class KPI:
@@ -241,17 +296,10 @@ REFUSAL_STR = "I don't know based on the MD."
 # ====== LOGGING CONFIG ======
 
 
-def _get_bool_env(var_name: str, default: str = "1") -> bool:
-    """Read a boolean environment variable."""
-
-    value = os.environ.get(var_name, default)
-    return value.lower() not in {"0", "false", "no", "off", ""}
-
-
 # Query logging configuration
-QUERY_LOG_FILE = os.environ.get("RAG_LOG_FILE", "rag_queries.jsonl")
+QUERY_LOG_FILE = _get_env_value("RAG_LOG_FILE", "rag_queries.jsonl") or "rag_queries.jsonl"
 LOG_QUERY_INCLUDE_ANSWER = _get_bool_env("RAG_LOG_INCLUDE_ANSWER", "1")
-LOG_QUERY_ANSWER_PLACEHOLDER = os.environ.get("RAG_LOG_ANSWER_PLACEHOLDER", "[REDACTED]")
+LOG_QUERY_ANSWER_PLACEHOLDER = _get_env_value("RAG_LOG_ANSWER_PLACEHOLDER", "[REDACTED]") or "[REDACTED]"
 LOG_QUERY_INCLUDE_CHUNKS = _get_bool_env("RAG_LOG_INCLUDE_CHUNKS", "0")  # Redact chunk text by default for security/privacy
 
 # Citation validation configuration
@@ -268,15 +316,15 @@ RATE_LIMIT_REQUESTS = _parse_env_int("RATE_LIMIT_REQUESTS", 10, min_val=1, max_v
 RATE_LIMIT_WINDOW = _parse_env_int("RATE_LIMIT_WINDOW", 60, min_val=1, max_val=3600)
 
 # ====== API AUTH CONFIG ======
-API_AUTH_MODE = os.environ.get("API_AUTH_MODE", "none").strip().lower()
-_api_keys_raw = os.environ.get("API_ALLOWED_KEYS", "")
+API_AUTH_MODE = (_get_env_value("API_AUTH_MODE", "none") or "none").strip().lower()
+_api_keys_raw = _get_env_value("API_ALLOWED_KEYS", "")
 if _api_keys_raw.strip():
     API_ALLOWED_KEYS = frozenset(
         key.strip() for key in _api_keys_raw.split(",") if key.strip()
     )
 else:
     API_ALLOWED_KEYS = frozenset()
-API_KEY_HEADER = os.environ.get("API_KEY_HEADER", "x-api-key").strip() or "x-api-key"
+API_KEY_HEADER = (_get_env_value("API_KEY_HEADER", "x-api-key") or "x-api-key").strip() or "x-api-key"
 
 # ====== WARMUP CONFIG ======
 # Warm-up on startup
@@ -288,16 +336,16 @@ NLTK_AUTO_DOWNLOAD = _get_bool_env("NLTK_AUTO_DOWNLOAD", "1")
 
 # ====== QUERY EXPANSION CONFIG ======
 # Query expansion file path
-CLOCKIFY_QUERY_EXPANSIONS = os.environ.get("CLOCKIFY_QUERY_EXPANSIONS", None)
+CLOCKIFY_QUERY_EXPANSIONS = _get_env_value("CLOCKIFY_QUERY_EXPANSIONS", None)
 
 # Maximum query expansion file size (in bytes)
 MAX_QUERY_EXPANSION_FILE_SIZE = _parse_env_int("MAX_QUERY_EXPANSION_FILE_SIZE", 10485760, min_val=1024, max_val=104857600)  # 10MB default, 100MB max
 
 # ====== PROXY CONFIGURATION ======
 # Optional HTTP proxy support (disabled by default for security)
-ALLOW_PROXIES = _get_bool_env("ALLOW_PROXIES", "0")  # Enable proxy usage when set to 1/true/yes
-HTTP_PROXY = os.environ.get("HTTP_PROXY", "")  # HTTP proxy URL
-HTTPS_PROXY = os.environ.get("HTTPS_PROXY", "")  # HTTPS proxy URL
+ALLOW_PROXIES = _get_bool_env("ALLOW_PROXIES", "0", legacy_keys=("USE_PROXY",))  # Enable proxy usage when set to 1/true/yes
+HTTP_PROXY = _get_env_value("HTTP_PROXY", "") or ""
+HTTPS_PROXY = _get_env_value("HTTPS_PROXY", "") or ""
 
 # Set proxy environment variables if allowed and configured
 if ALLOW_PROXIES:
@@ -340,4 +388,4 @@ COVERAGE_MIN_CHUNKS = 2  # Minimum chunks above threshold to proceed
 # ====== PRECOMPUTED FAQ CACHE (Analysis Section 9.1 #3) ======
 # OPTIMIZATION: Pre-generate answers for top FAQs for 100% cache hit on common queries
 FAQ_CACHE_ENABLED = _get_bool_env("FAQ_CACHE_ENABLED", "0")  # Disabled by default (requires build step)
-FAQ_CACHE_PATH = os.environ.get("FAQ_CACHE_PATH", "faq_cache.json")  # Path to precomputed cache file
+FAQ_CACHE_PATH = _get_env_value("FAQ_CACHE_PATH", "faq_cache.json") or "faq_cache.json"

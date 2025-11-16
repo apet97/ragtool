@@ -6,6 +6,8 @@ Use this checklist before promoting a new build or rolling out changes to the in
 - [ ] `pyproject.toml`, Dockerfile, and README all target Python **3.11** (same version in CI and runtime).
 - [ ] `pip install -e '.[dev]'` (or `pip install -r requirements.lock`) completes without errors and `python -m pip check` passes.
 - [ ] `make deps-check` (pip check + pytest smoke) is green on the deployment host.
+- [ ] `make test-quick` (config/API client/answer core tests) is green on the deployment host.
+- [ ] `make verify` (pip check + quick pytest subset + `make smoke`) is archived as part of the release notes/runbook.
 - [ ] Imports audited so every runtime dependency is declared in `pyproject.toml`/`requirements.txt`; unused packages removed.
 - [ ] `VERIFICATION.md` steps (doctor, smoke, Docker pip check) executed and archived in the release notes/runbook.
 
@@ -31,12 +33,12 @@ Use this checklist before promoting a new build or rolling out changes to the in
 ## 4. Retrieval & Prompting
 - [ ] Retrieval parameters (`DEFAULT_TOP_K`, `DEFAULT_PACK_TOP`, `DEFAULT_THRESHOLD`, `MMR_LAMBDA`) documented for this deployment.
 - [ ] Intent classification enabled/disabled intentionally (`USE_INTENT_CLASSIFICATION`).
-- [ ] `scripts/smoke_rag.py --client mock` succeeds locally; `--client ollama` succeeds on VPN.
+- [ ] `make smoke` (mock) succeeds locally; `SMOKE_CLIENT=ollama make smoke` succeeds on VPN (or run `python3 scripts/smoke_rag.py --client ...` directly).
 - [ ] Prompt templates reviewed (system/user wrappers) for any policy updates.
 
 ## 5. Tests & Evaluation
-- [ ] `pytest` (or at least `pytest tests/test_api_client.py tests/test_config_module.py`) passes in the targeted environment.
-- [ ] `make smoke` completes with status `0` (and double-check with `RAG_LLM_CLIENT=ollama` before prod).
+- [ ] `make test-quick` (or at least `pytest tests/test_api_client.py tests/test_config_module.py`) passes in the targeted environment.
+- [ ] `make smoke` completes with status `0` (and double-check with `SMOKE_CLIENT=ollama make smoke` before prod).
 - [ ] `eval.py --dataset eval_datasets/clockify_v1.jsonl` meets agreed retrieval thresholds (MRR, NDCG).
 - [ ] Deterministic mock client regression (if applicable) captured for CI by setting `RAG_LLM_CLIENT=mock`.
 

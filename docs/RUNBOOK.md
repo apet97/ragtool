@@ -23,11 +23,11 @@ Operational checklist for the Clockify RAG service. Use this document when bring
 3. **End-to-end smoke test**
    ```bash
    # Offline CI mode
-   RAG_LLM_CLIENT=mock make smoke
+   make smoke
 
    # Production mode (VPN → remote Ollama)
    RAG_OLLAMA_URL=http://10.127.0.192:11434 \
-   RAG_LLM_CLIENT=ollama make smoke
+   SMOKE_CLIENT=ollama make smoke
    ```
    `scripts/smoke_rag.py` prints routing + timing; exit codes other than 0 indicate failure.
 
@@ -72,7 +72,7 @@ Each `answer_once` call logs `rag.query.start`/`rag.query.complete` with questio
 1. Put the service in maintenance (optional) and stop the API process.
 2. `rm -f chunks.jsonl vecs_n.npy bm25.json index.meta.json`.
 3. `ragctl ingest --input knowledge_full.md`.
-4. `make smoke` (mock), then `make smoke SMOKE_ARGS="--question 'How do I track time?'"` against the production Ollama host.
+4. `make smoke` (mock), then `SMOKE_CLIENT=ollama make smoke SMOKE_ARGS="--question 'How do I track time?'"` against the production Ollama host.
 5. Restart the API (`uvicorn clockify_rag.api:app --port 8000`).
 6. Monitor `/v1/metrics` for error counters while traffic ramps up.
 

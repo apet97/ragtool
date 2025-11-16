@@ -313,8 +313,15 @@ def setup_cli_args():
                     help="Logging level (default INFO)")
     ap.add_argument("--no-log", action="store_true",
                     help="Disable query log file writes (privacy mode)")
-    ap.add_argument("--ollama-url", type=str, default=None,
-                    help="Ollama endpoint (default from RAG_OLLAMA_URL env or http://10.127.0.192:11434; override with http://127.0.0.1:11434 for local Ollama)")
+    ap.add_argument(
+        "--ollama-url",
+        type=str,
+        default=None,
+        help=(
+            f"Ollama endpoint (default from RAG_OLLAMA_URL env or {config.DEFAULT_RAG_OLLAMA_URL}; "
+            f"override with {config.DEFAULT_LOCAL_OLLAMA_URL} for local Ollama)"
+        ),
+    )
     ap.add_argument("--gen-model", type=str, default=None,
                     help="Generation model name (default from RAG_CHAT_MODEL env or qwen2.5:32b)")
     ap.add_argument("--emb-model", type=str, default=None,
