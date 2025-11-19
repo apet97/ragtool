@@ -60,7 +60,8 @@ EMB_MODEL=nomic-embed-text               # Embedding model
 
 # Performance Tuning
 CTX_BUDGET=12000                         # Context token budget
-DEFAULT_TOP_K=15                         # Retrieval depth
+DEFAULT_TOP_K=15                         # Retrieval depth (default candidates)
+MAX_TOP_K=50                             # Maximum top-K ceiling (safety cap)
 DEFAULT_PACK_TOP=8                       # Snippets to pack in context
 
 # Security and Privacy
@@ -197,8 +198,17 @@ sudo systemctl start rag-service
 
 ### Health Checks
 ```bash
+# Check environment
+python scripts/verify_env.py
+
+# Verify fallback behavior (model selection)
+python scripts/verify_fallback.py
+
 # Check system health
 python -c "from clockify_rag.error_handlers import print_system_health; print_system_health()"
+
+# Run sanity check (end-to-end)
+python -m clockify_rag.sanity_check
 
 # Run self-tests
 python clockify_support_cli_final.py --selftest

@@ -10,17 +10,21 @@ For rapid validation after code changes or before deployment:
 # 1. Verify environment
 python scripts/verify_env.py
 
-# 2. Run Python smoke test (uses mock LLM, no VPN needed)
+# 2. Verify import fallback behavior
+python scripts/verify_fallback.py
+
+# 3. Run Python smoke test (uses mock LLM, no VPN needed)
 python scripts/smoke_rag.py
 
-# 3. Run sanity check (requires VPN/Ollama)
+# 4. Run sanity check (requires VPN/Ollama)
 python -m clockify_rag.sanity_check
 ```
 
 **Expected Results:**
 - All checks show ✅ green checkmarks
+- verify_fallback.py: 6/6 scenarios passed
 - Python smoke test returns exit code 0
-- Sanity check passes all 5 checks
+- Sanity check passes all 5 checks (or 4/5 if VPN down)
 
 **If any fail:**
 - Check error messages for specific issues
@@ -216,6 +220,9 @@ export MAX_TOP_K=100
 ```bash
 # Environment check
 python scripts/verify_env.py
+
+# Fallback verification (unit test, no VPN needed)
+python scripts/verify_fallback.py
 
 # Sanity check (requires VPN)
 python -m clockify_rag.sanity_check

@@ -84,11 +84,9 @@ def test_scenario_connection_timeout():
     from clockify_rag.config import _select_best_model
 
     with mock.patch("clockify_rag.config._check_remote_models") as mock_check:
-        # Mock: Network timeout (VPN down)
-        class TimeoutError(Exception):
-            """Simulated timeout error."""
-            pass
-        mock_check.side_effect = TimeoutError("Connection timed out")
+        # Mock: Network timeout returns empty list (VPN down)
+        # The real _check_remote_models catches exceptions and returns []
+        mock_check.return_value = []
 
         selected = _select_best_model(
             primary="qwen2.5:32b",
@@ -115,13 +113,9 @@ def test_scenario_connection_error():
     from clockify_rag.config import _select_best_model
 
     with mock.patch("clockify_rag.config._check_remote_models") as mock_check:
-        # Mock: Connection refused (Ollama offline)
-        class ConnectionError(Exception):
-            """Simulated connection error."""
-            pass
-        mock_check.side_effect = ConnectionError(
-            "Connection refused"
-        )
+        # Mock: Connection error returns empty list (Ollama offline)
+        # The real _check_remote_models catches exceptions and returns []
+        mock_check.return_value = []
 
         selected = _select_best_model(
             primary="qwen2.5:32b",
