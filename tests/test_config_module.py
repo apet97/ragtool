@@ -338,6 +338,7 @@ def test_select_best_model_returns_primary_if_neither_available(monkeypatch: pyt
 
 def test_llm_model_is_selected_at_module_load(monkeypatch: pytest.MonkeyPatch):
     """Verify that LLM_MODEL is selected/initialized at module import time."""
+
     class MockResponse:
         def raise_for_status(self):
             pass

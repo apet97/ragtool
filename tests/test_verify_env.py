@@ -347,7 +347,9 @@ class TestVerifyEnvCLI:
         )
 
         # Should pass in normal mode (optional missing is OK)
-        assert result.returncode == 0, f"Expected exit code 0, got {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        assert (
+            result.returncode == 0
+        ), f"Expected exit code 0, got {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert "Optional dependencies" in result.stdout or "optional" in result.stdout.lower()
 
     def test_cli_strict_mode_with_optional_missing_via_hook(self, verify_env_script):
