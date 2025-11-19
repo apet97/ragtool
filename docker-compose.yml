@@ -1,23 +1,13 @@
 version: '3.8'
 
 services:
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ./ollama_models:/root/.ollama  # Persist models
-      - ./data:/data  # For data access
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-      - OLLAMA_ORIGINS=*
-    deploy:
-      resources:
-        limits:
-          memory: 8G
-        reservations:
-          memory: 2G
-    command: serve
+  # REMOTE-FIRST DESIGN: No local Ollama service
+  # All LLM generation and embeddings run on the corporate Ollama instance
+  # (reachable over VPN at http://10.127.0.192:11434)
+  #
+  # To use a local Ollama instead, set:
+  #   RAG_OLLAMA_URL=http://host.docker.internal:11434
+  # Or uncomment the ollama service below.
 
   rag-app:
     build: .
@@ -29,43 +19,48 @@ services:
       - ./logs:/app/logs
       - ./.env:/app/.env:ro
     environment:
-      - OLLAMA_URL=http://ollama:11434
-      - GEN_MODEL=qwen2.5:32b
-      - EMB_MODEL=nomic-embed-text
+      # Remote-first design: use corporate Ollama over VPN
+      # Default in .env.example: http://10.127.0.192:11434
+      - RAG_OLLAMA_URL=${RAG_OLLAMA_URL:-http://10.127.0.192:11434}
+      - RAG_CHAT_MODEL=qwen2.5:32b
+      - RAG_CHAT_FALLBACK_MODEL=gpt-oss:20b
+      - RAG_EMBED_MODEL=nomic-embed-text:latest
       - RAG_LOG_FILE=/app/logs/rag_queries.jsonl
-    depends_on:
-      - ollama
+      - OLLAMA_TIMEOUT=120
+      # Control whether sanity_check runs before uvicorn (default: 1=enabled)
+      # Set to 0 to skip sanity_check (useful when Ollama is temporarily unavailable)
+      - RUN_SANITY_CHECK=1
+    # No depends_on: remote Ollama is already running
     command: >
       bash -c "
-        # Wait for Ollama to be ready
-        until curl -f http://ollama:11434/api/tags > /dev/null 2>&1; do
-          echo 'Waiting for Ollama to start...'
-          sleep 2
-        done &&
-        echo 'Ollama is ready, starting RAG application...' &&
-        python clockify_support_cli_final.py chat
+        echo 'Starting RAG application (remote-first design)...' &&
+        if [ \"$${RUN_SANITY_CHECK:-1}\" = \"1\" ]; then
+          echo 'Running sanity checks...' &&
+          python -m clockify_rag.sanity_check || exit 1
+        else
+          echo 'Sanity checks disabled (RUN_SANITY_CHECK=0)'
+        fi &&
+        echo 'Starting uvicorn server on port 8000...' &&
+        uvicorn clockify_rag.api:app --host 0.0.0.0 --port 8000
       "
 
-  # Optional: Model preparation service
-  model-setup:
-    build: .
-    volumes:
-      - ./knowledge_full.md:/app/knowledge_full.md:ro
-      - ./data:/app/data
-    environment:
-      - OLLAMA_URL=http://ollama:11434
-    depends_on:
-      - ollama
-    command: >
-      bash -c "
-        # Wait for Ollama to be ready
-        until curl -f http://ollama:11434/api/tags > /dev/null 2>&1; do
-          echo 'Waiting for Ollama to start...'
-          sleep 2
-        done &&
-        echo 'Pulling required models...' &&
-        curl -X POST http://ollama:11434/api/pull -d '{\"name\":\"qwen2.5:32b\"}' &&
-        curl -X POST http://ollama:11434/api/pull -d '{\"name\":\"nomic-embed-text\"}' &&
-        echo 'Models pulled, exiting...' &&
-        sleep 5
-      "
+  # ============================================================================
+  # OPTIONAL: Uncomment to run a local Ollama in Docker for testing/development
+  # ============================================================================
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ./ollama_models:/root/.ollama  # Persist models
+  #     - ./data:/data  # For data access
+  #   environment:
+  #     - OLLAMA_HOST=0.0.0.0
+  #     - OLLAMA_ORIGINS=*
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 8G
+  #       reservations:
+  #         memory: 2G
+  #   command: serve

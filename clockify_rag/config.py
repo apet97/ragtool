@@ -5,6 +5,8 @@ import os
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
+import requests
+
 # FIX (Error #13): Helper functions for safe environment variable parsing
 _logger = logging.getLogger(__name__)
 
@@ -132,7 +134,8 @@ def get_query_expansions_path() -> Optional[str]:
     return value or None
 
 
-# ====== OLLAMA CONFIG ======
+# ====== OLLAMA CONFIG (Remote-First Design) ======
+# Corporate Ollama server (reachable only over VPN on macOS + corporate networks)
 _DEFAULT_RAG_OLLAMA_URL = "http://10.127.0.192:11434"
 DEFAULT_RAG_OLLAMA_URL = _DEFAULT_RAG_OLLAMA_URL
 DEFAULT_LOCAL_OLLAMA_URL = "http://127.0.0.1:11434"
@@ -142,11 +145,23 @@ RAG_OLLAMA_URL = _get_env_value(
     default=_DEFAULT_RAG_OLLAMA_URL,
     legacy_keys=("OLLAMA_URL",),
 )
+
+# Timeout for remote Ollama operations (VPN is flaky; balance between responsiveness and reliability)
+OLLAMA_TIMEOUT = _parse_env_float("OLLAMA_TIMEOUT", 120.0, min_val=5.0, max_val=600.0)
+
+# LLM model selection (primary + fallback for resilience)
 RAG_CHAT_MODEL = _get_env_value(
     "RAG_CHAT_MODEL",
     default="qwen2.5:32b",
     legacy_keys=("GEN_MODEL", "CHAT_MODEL"),
 )
+RAG_CHAT_FALLBACK_MODEL = _get_env_value(
+    "RAG_CHAT_FALLBACK_MODEL",
+    default="gpt-oss:20b",
+    legacy_keys=("FALLBACK_MODEL",),
+)
+
+# Embedding model (always remote via Ollama, no local fallback)
 RAG_EMBED_MODEL = _get_env_value(
     "RAG_EMBED_MODEL",
     default="nomic-embed-text:latest",
@@ -189,9 +204,112 @@ def current_llm_settings(default_client_mode: str = "") -> LLMSettings:
     )
 
 
+# ====== REMOTE MODEL SELECTION (VPN-Safe) ======
+
+
+def _check_remote_models(base_url: str, timeout: float = 5.0) -> list:
+    """Check available models on remote Ollama server via /api/tags.
+
+    Safe for VPN environments: uses short timeout, logs warnings instead of raising.
+
+    Args:
+        base_url: Ollama base URL (e.g., http://10.127.0.192:11434)
+        timeout: Connection timeout in seconds (default 5s for VPN)
+
+    Returns:
+        List of available model tags, or empty list if unreachable/error.
+    """
+    try:
+        tags_url = f"{base_url}/api/tags"
+        resp = requests.get(tags_url, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        models = [m["name"] for m in data.get("models", [])]
+        _logger.info(f"✓ Remote Ollama online ({len(models)} models available)")
+        return models
+    except requests.Timeout:
+        _logger.warning(f"⏱ Ollama /api/tags timed out after {timeout}s (VPN down or slow)")
+        return []
+    except requests.ConnectionError:
+        _logger.warning(f"✗ Cannot connect to Ollama at {base_url} (check VPN and firewall)")
+        return []
+    except Exception as e:
+        _logger.warning(f"✗ Failed to check Ollama models: {e}")
+        return []
+
+
+def _select_best_model(
+    primary: str, fallback: str, base_url: str, timeout: float = 5.0
+) -> str:
+    """Select the best available LLM model (primary or fallback).
+
+    Smart selection with VPN resilience:
+    1. If unable to reach server, return primary (assume it will work when VPN is up)
+    2. If primary is available, return it
+    3. If only fallback is available, log warning and return fallback
+    4. If neither is available, log warning and return primary
+
+    Args:
+        primary: Primary model name (e.g., "qwen2.5:32b")
+        fallback: Fallback model name (e.g., "gpt-oss:20b")
+        base_url: Ollama base URL
+        timeout: Timeout for /api/tags check (seconds)
+
+    Returns:
+        Selected model name (primary or fallback)
+    """
+    available = _check_remote_models(base_url, timeout)
+
+    if not available:
+        # Server unreachable; assume primary will work when VPN comes back
+        _logger.info(f"Using primary model (server offline): {primary}")
+        return primary
+
+    if primary in available:
+        _logger.info(f"Using primary model: {primary}")
+        return primary
+
+    if fallback in available:
+        _logger.warning(f"Primary model '{primary}' unavailable; using fallback: {fallback}")
+        return fallback
+
+    _logger.warning(f"Neither '{primary}' nor '{fallback}' available; using primary anyway: {primary}")
+    return primary
+
+
+# ====== LAZY LLM MODEL SELECTION (VPN-safe) ======
+# Cache for lazy model selection (avoid network call at every import)
+_LLM_MODEL_CACHE: Optional[str] = None
+
+
+def get_llm_model() -> str:
+    """Get the selected LLM model with lazy caching.
+
+    On first call, checks remote Ollama for available models and selects
+    primary or fallback. Subsequent calls return the cached value.
+
+    This avoids network calls at module import time, which is critical for
+    fast startup and avoiding hangs when VPN is down.
+
+    Returns:
+        Selected model name (primary or fallback)
+    """
+    global _LLM_MODEL_CACHE
+    if _LLM_MODEL_CACHE is None:
+        _LLM_MODEL_CACHE = _select_best_model(
+            RAG_CHAT_MODEL, RAG_CHAT_FALLBACK_MODEL, RAG_OLLAMA_URL, timeout=5.0
+        )
+    return _LLM_MODEL_CACHE
+
+
+# Initialize LLM_MODEL lazily (only runs on first access to get_llm_model())
+# For backward compatibility, we still provide LLM_MODEL at module level,
+# but it now calls the lazy function
+LLM_MODEL = get_llm_model()
+
 # Backwards-compatible aliases (legacy code/tests expect these names)
 OLLAMA_URL = RAG_OLLAMA_URL
-GEN_MODEL = RAG_CHAT_MODEL
+GEN_MODEL = LLM_MODEL  # Use selected model, not raw config
 EMB_MODEL = RAG_EMBED_MODEL
 
 # ====== CHUNKING CONFIG ======
@@ -201,6 +319,12 @@ CHUNK_OVERLAP = _parse_env_int("CHUNK_OVERLAP", 200, min_val=0, max_val=4000)
 # ====== RETRIEVAL CONFIG ======
 # OPTIMIZATION: Increase retrieval parameters for better recall on internal deployment
 DEFAULT_TOP_K = _parse_env_int("DEFAULT_TOP_K", 15, min_val=1, max_val=100)  # Was 12, now 15 (more candidates)
+
+# Alias for clarity: RETRIEVAL_K is the safe retrieval depth for both primary and fallback models
+# This value (15) is context-window safe even for the smaller fallback model (gpt-oss:20b with 4k tokens)
+# Typical chunk size: ~400 tokens → 15 chunks = ~6000 tokens, leaving room for prompt and response
+RETRIEVAL_K = DEFAULT_TOP_K  # Backward compatibility and semantic clarity
+
 DEFAULT_PACK_TOP = _parse_env_int(
     "DEFAULT_PACK_TOP", 8, min_val=1, max_val=50
 )  # Was 6, now 8 (more snippets in context)
@@ -294,8 +418,19 @@ class KPI:
 # ====== TIMEOUT CONFIG ======
 # Task G: Deterministic timeouts (environment-configurable for ops)
 # FIX (Error #13): Use safe env var parsing
-EMB_CONNECT_T = _parse_env_float("EMB_CONNECT_TIMEOUT", 3.0, min_val=0.1, max_val=60.0)
-EMB_READ_T = _parse_env_float("EMB_READ_TIMEOUT", 60.0, min_val=1.0, max_val=600.0)
+# Support both EMBEDDING_* (preferred) and EMB_* (legacy) names
+EMB_CONNECT_T = _parse_env_float(
+    _get_env_value("EMBEDDING_CONNECT_TIMEOUT", None, legacy_keys=("EMB_CONNECT_TIMEOUT",)) or "5.0",
+    5.0,
+    min_val=1.0,
+    max_val=60.0,
+)
+EMB_READ_T = _parse_env_float(
+    _get_env_value("EMBEDDING_READ_TIMEOUT", None, legacy_keys=("EMB_READ_TIMEOUT",)) or "60.0",
+    60.0,
+    min_val=5.0,
+    max_val=300.0,
+)
 CHAT_CONNECT_T = _parse_env_float("CHAT_CONNECT_TIMEOUT", 3.0, min_val=0.1, max_val=60.0)
 CHAT_READ_T = _parse_env_float("CHAT_READ_TIMEOUT", 120.0, min_val=1.0, max_val=600.0)
 RERANK_READ_T = _parse_env_float("RERANK_READ_TIMEOUT", 180.0, min_val=1.0, max_val=600.0)

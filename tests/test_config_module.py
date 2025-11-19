@@ -195,3 +195,176 @@ def test_blank_strings_are_treated_as_missing(monkeypatch: pytest.MonkeyPatch):
     )
     assert cfg.CLOCKIFY_QUERY_EXPANSIONS is None
     assert cfg.HTTP_PROXY == ""
+
+
+# ============================================================================
+# Remote Model Selection Tests (Remote-First Design)
+# ============================================================================
+
+
+def test_check_remote_models_returns_empty_on_timeout(monkeypatch: pytest.MonkeyPatch):
+    """Verify that unreachable Ollama servers return empty list (VPN safe)."""
+    import requests
+
+    cfg = _load_config_module(monkeypatch)
+
+    # Mock requests.get to timeout
+    def mock_timeout(*args, **kwargs):
+        raise requests.Timeout("Connection timed out")
+
+    monkeypatch.setattr("requests.get", mock_timeout)
+
+    # Should return empty list without hanging
+    models = cfg._check_remote_models("http://unreachable:11434", timeout=0.1)
+    assert models == []
+
+
+def test_check_remote_models_returns_empty_on_connection_error(monkeypatch: pytest.MonkeyPatch):
+    """Verify that connection errors return empty list (VPN down)."""
+    import requests
+
+    cfg = _load_config_module(monkeypatch)
+
+    def mock_connection_error(*args, **kwargs):
+        raise requests.ConnectionError("Cannot connect")
+
+    monkeypatch.setattr("requests.get", mock_connection_error)
+
+    models = cfg._check_remote_models("http://invalid:11434", timeout=5.0)
+    assert models == []
+
+
+def test_check_remote_models_parses_valid_response(monkeypatch: pytest.MonkeyPatch):
+    """Verify that valid /api/tags response is parsed correctly."""
+    import requests
+
+    cfg = _load_config_module(monkeypatch)
+
+    class MockResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "models": [
+                    {"name": "qwen2.5:32b"},
+                    {"name": "gpt-oss:20b"},
+                    {"name": "nomic-embed-text:latest"},
+                ]
+            }
+
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: MockResponse())
+
+    models = cfg._check_remote_models("http://ollama:11434", timeout=5.0)
+    assert models == ["qwen2.5:32b", "gpt-oss:20b", "nomic-embed-text:latest"]
+
+
+def test_select_best_model_prefers_primary(monkeypatch: pytest.MonkeyPatch):
+    """Verify that primary model is selected when available."""
+    import requests
+
+    cfg = _load_config_module(monkeypatch)
+
+    class MockResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "models": [
+                    {"name": "qwen2.5:32b"},
+                    {"name": "gpt-oss:20b"},
+                ]
+            }
+
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: MockResponse())
+
+    selected = cfg._select_best_model("qwen2.5:32b", "gpt-oss:20b", "http://ollama:11434", timeout=5.0)
+    assert selected == "qwen2.5:32b"
+
+
+def test_select_best_model_falls_back_to_secondary(monkeypatch: pytest.MonkeyPatch):
+    """Verify that fallback model is selected if primary is unavailable."""
+    import requests
+
+    cfg = _load_config_module(monkeypatch)
+
+    class MockResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "models": [
+                    {"name": "gpt-oss:20b"},  # Only fallback available
+                ]
+            }
+
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: MockResponse())
+
+    selected = cfg._select_best_model("qwen2.5:32b", "gpt-oss:20b", "http://ollama:11434", timeout=5.0)
+    assert selected == "gpt-oss:20b"
+
+
+def test_select_best_model_returns_primary_on_timeout(monkeypatch: pytest.MonkeyPatch):
+    """Verify that primary model is returned if server is unreachable (VPN resilience)."""
+    import requests
+
+    cfg = _load_config_module(monkeypatch)
+
+    def mock_timeout(*args, **kwargs):
+        raise requests.Timeout("Cannot reach")
+
+    monkeypatch.setattr("requests.get", mock_timeout)
+
+    selected = cfg._select_best_model("qwen2.5:32b", "gpt-oss:20b", "http://ollama:11434", timeout=0.1)
+    assert selected == "qwen2.5:32b"  # Assume primary will work when VPN is back
+
+
+def test_select_best_model_returns_primary_if_neither_available(monkeypatch: pytest.MonkeyPatch):
+    """Verify that primary model is returned if neither model is available (graceful fallback)."""
+    import requests
+
+    cfg = _load_config_module(monkeypatch)
+
+    class MockResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "models": [
+                    {"name": "other-model:latest"},  # Neither primary nor fallback
+                ]
+            }
+
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: MockResponse())
+
+    selected = cfg._select_best_model("qwen2.5:32b", "gpt-oss:20b", "http://ollama:11434", timeout=5.0)
+    assert selected == "qwen2.5:32b"  # Return primary anyway
+
+
+def test_llm_model_is_selected_at_module_load(monkeypatch: pytest.MonkeyPatch):
+    """Verify that LLM_MODEL is selected/initialized at module import time."""
+    import requests
+
+    class MockResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "models": [
+                    {"name": "qwen2.5:32b"},
+                ]
+            }
+
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: MockResponse())
+
+    cfg = _load_config_module(monkeypatch)
+
+    # LLM_MODEL should be set and exported
+    assert hasattr(cfg, "LLM_MODEL")
+    assert cfg.LLM_MODEL == "qwen2.5:32b"
+    # GEN_MODEL is backwards-compatible alias that should point to selected LLM_MODEL
+    assert cfg.GEN_MODEL == cfg.LLM_MODEL

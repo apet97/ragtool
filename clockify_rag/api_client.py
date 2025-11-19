@@ -716,7 +716,14 @@ def get_ollama_client() -> BaseLLMClient:
 
 
 def get_llm_client() -> BaseLLMClient:
-    """Get the configured LLM client (real or mock)."""
+    """Get the configured LLM client (real or mock).
+
+    NOTE: This returns a BaseLLMClient (api_client abstraction layer).
+    For direct LangChain ChatOllama access, use llm_client.get_llm_client() instead.
+
+    The OllamaAPIClient uses requests directly for HTTP calls.
+    Future work: consider migrating to llm_client.get_llm_client() for unified client handling.
+    """
     global _LLM_CLIENT
     if _LLM_CLIENT is not None:
         return _LLM_CLIENT
@@ -725,6 +732,7 @@ def get_llm_client() -> BaseLLMClient:
         logger.info("Using MockLLMClient (RAG_LLM_CLIENT=%s)", client_pref or "mock")
         _LLM_CLIENT = MockLLMClient()
     else:
+        logger.debug("Initializing OllamaAPIClient (requests-based)")
         _LLM_CLIENT = OllamaAPIClient()
     return _LLM_CLIENT
 

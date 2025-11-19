@@ -7,6 +7,7 @@ import sys
 import tempfile
 import importlib.util
 
+import httpx
 import numpy as np
 import pytest
 
@@ -19,6 +20,35 @@ from clockify_rag.api_client import MockLLMClient, set_llm_client
 
 def _has_module(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
+
+
+def _vpn_reachable() -> bool:
+    """Check if the corporate Ollama server is reachable (VPN connectivity check).
+
+    Returns:
+        True if Ollama endpoint responds, False otherwise (e.g., VPN down, CI environment)
+    """
+    base_url = os.getenv("OLLAMA_BASE_URL") or os.getenv("RAG_OLLAMA_URL") or "http://10.127.0.192:11434"
+    try:
+        response = httpx.get(f"{base_url}/api/tags", timeout=1.0)
+        return response.status_code == 200
+    except (httpx.RequestError, httpx.TimeoutException, Exception):
+        return False
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip integration tests if VPN/Ollama is unreachable.
+
+    Tests marked with @pytest.mark.integration will be skipped in CI or when VPN is down.
+    """
+    if _vpn_reachable():
+        # VPN is up, run all tests including integration
+        return
+
+    skip_integration = pytest.mark.skip(reason="VPN unreachable, skipping integration tests")
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_integration)
 
 
 def pytest_configure(config):

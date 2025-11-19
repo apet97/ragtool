@@ -442,7 +442,7 @@ class DenseScoreStore:
 
 
 def retrieve(
-    question: str, chunks, vecs_n, bm, top_k=12, hnsw=None, retries=0, faiss_index_path=None
+    question: str, chunks, vecs_n, bm, top_k=None, hnsw=None, retries=0, faiss_index_path=None
 ) -> Tuple[List[int], Dict[str, Any]]:
     """Hybrid retrieval: dense + BM25 + dedup. Optionally uses FAISS/HNSW for fast K-NN.
 
@@ -467,6 +467,10 @@ def retrieve(
     global RETRIEVE_PROFILE_LAST
 
     question = validate_query_length(question)
+
+    # Use centralized config value if not specified
+    if top_k is None:
+        top_k = config.DEFAULT_TOP_K
 
     # OPTIMIZATION: Classify query intent for specialized retrieval strategy (if enabled)
     intent_metadata = {}

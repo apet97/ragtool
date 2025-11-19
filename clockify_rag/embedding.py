@@ -124,33 +124,28 @@ def validate_ollama_embeddings(sample_text: str = "test") -> tuple:
 
 
 def _embed_single_text(index: int, text: str, retries: int, total: int) -> tuple:
-    """Embed a single text using Ollama API (helper for parallel batching).
+    """Embed a single text using remote Ollama (helper for parallel batching).
 
     Args:
         index: Index of this text in the full list
         text: Text to embed
-        retries: Number of retries for HTTP session
+        retries: Number of retries for HTTP session (currently unused; embeddings_client handles retries)
         total: Total number of texts (for logging)
 
     Returns:
         tuple: (index, embedding_list) or raises EmbeddingError
     """
-    # Use the API client for structured embedding requests
-    from .api_client import create_embedding
-
     try:
-        # Validate embedding is not empty
-        emb = create_embedding(
-            text=text,
-            model=config.RAG_EMBED_MODEL,
-            timeout=(config.EMB_CONNECT_T, config.EMB_READ_T),
-            retries=retries,
-        )
+        # Use the new remote-first embeddings_client module
+        from .embeddings_client import embed_query
 
-        if not emb or len(emb) == 0:
+        # Embed single text and return as list (matching old API contract)
+        embedding = embed_query(text)
+
+        if embedding is None or embedding.size == 0:
             raise EmbeddingError(f"Embedding chunk {index}: empty embedding returned (check Ollama API format)")
 
-        return (index, emb)
+        return (index, embedding.tolist())
     except EmbeddingError as e:
         raise EmbeddingError(f"Embedding chunk {index} failed: {e}") from e
     except Exception as e:
@@ -340,29 +335,35 @@ def save_embedding_cache(cache: dict):
 
 
 def embed_query(question: str, retries=0) -> np.ndarray:
-    """Embed a single query using configured backend with proper normalization."""
+    """Embed a single query using configured backend with proper normalization.
+
+    For local backend: Uses SentenceTransformer (all-MiniLM-L6-v2, 384-dim)
+    For ollama backend: Uses remote Ollama via embeddings_client (nomic-embed-text, 768-dim)
+
+    Args:
+        question: Query text to embed
+        retries: Unused parameter (for backward compatibility with older API)
+
+    Returns:
+        Normalized float32 numpy array of shape (embedding_dim,)
+    """
     if config.EMB_BACKEND == "local":
         vec = embed_local_batch([question], normalize=True)
         return vec[0]
     else:
-        # Use the API client approach for single embeddings too
-        from .api_client import create_embedding
+        # Use the remote embeddings_client for all Ollama queries
+        from .embeddings_client import embed_query as embed_query_remote
 
         try:
-            embedding = create_embedding(
-                text=question,
-                model=config.RAG_EMBED_MODEL,
-                timeout=(config.EMB_CONNECT_T, config.EMB_READ_T),
-                retries=retries,
-            )
-            vec = np.array(embedding, dtype=np.float32)
-        except Exception:
-            # Fallback to the old method if API client fails
-            vecs = embed_texts([question], retries=retries)
-            vec = vecs[0]
-
-        # Normalize for cosine similarity
-        norm = np.linalg.norm(vec)
-        if norm > 0:
-            vec = vec / norm
-        return vec
+            # embeddings_client.embed_query returns already-normalized 1D array
+            vec = embed_query_remote(question)
+            return vec
+        except Exception as e:
+            logger.error(f"Failed to embed query via embeddings_client: {e}")
+            # Fallback: try embed_texts if single query fails
+            try:
+                vecs = embed_texts([question], retries=retries)
+                return vecs[0] if len(vecs) > 0 else np.zeros(config.EMB_DIM, dtype=np.float32)
+            except Exception as e2:
+                logger.error(f"Fallback embed_texts also failed: {e2}")
+                raise

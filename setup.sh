@@ -90,41 +90,136 @@ info "Upgrading pip..."
 python -m pip install --upgrade pip -q
 success "pip upgraded"
 
-# Step 5.5: Check for M1 and recommend conda for FAISS compatibility
+# Step 5.5: Check for M1 and handle conda vs pip
 MACHINE_ARCH=$(uname -m 2>/dev/null || echo "unknown")
 SYSTEM_OS=$(uname -s 2>/dev/null || echo "unknown")
+IS_M1_MAC=false
 
 if [ "$SYSTEM_OS" = "Darwin" ] && [ "$MACHINE_ARCH" = "arm64" ]; then
+    IS_M1_MAC=true
     echo ""
     warning "Apple Silicon (M1/M2/M3) detected!"
     echo ""
-    echo "  For best FAISS compatibility on M1 Macs, we recommend using conda instead of pip."
+    echo "  FAISS on ARM64 requires special handling."
+    echo "  Choose installation method:"
     echo ""
-    echo "  Why conda?"
-    echo "    • FAISS ARM64 builds available via conda-forge"
-    echo "    • PyTorch with MPS acceleration"
-    echo "    • Better package compatibility on Apple Silicon"
+    echo "  [1] Conda (RECOMMENDED)"
+    echo "      • FAISS ARM64 builds from conda-forge"
+    echo "      • PyTorch with MPS GPU acceleration"
+    echo "      • Best compatibility and performance"
     echo ""
-    echo "  Quick conda setup:"
-    echo "    1. Install Miniforge: brew install miniforge"
-    echo "    2. Create environment: conda create -n rag_env python=3.11"
-    echo "    3. Activate: conda activate rag_env"
-    echo "    4. Install: see requirements-m1.txt for one-line command"
+    echo "  [2] pip (NOT RECOMMENDED)"
+    echo "      • FAISS may fail to install"
+    echo "      • No GPU acceleration"
+    echo "      • Fallback to USE_ANN=none if build fails"
     echo ""
-    echo "  See M1_COMPATIBILITY.md for detailed instructions."
-    echo ""
-    read -p "Continue with pip installation anyway? [y/N]: " -n 1 -r
+    read -p "Choose installation method [1=conda, 2=pip, q=quit]: " -n 1 -r
     echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        info "Setup cancelled. Please use conda for M1 installation."
-        info "See requirements-m1.txt or M1_COMPATIBILITY.md for instructions."
+
+    if [[ $REPLY == "1" ]]; then
+        # Conda flow for M1
+        echo ""
+        info "Using Conda installation for M1..."
+        info "Please ensure Miniforge/Conda is installed:"
+        echo "    brew install miniforge"
+        echo ""
+
+        # Deactivate current venv if active
+        if [ -n "$VIRTUAL_ENV" ]; then
+            info "Deactivating current virtual environment..."
+            deactivate || true
+        fi
+
+        # Check if conda is available
+        if ! command -v conda &> /dev/null; then
+            error "conda not found. Install Miniforge first:"
+            echo "    /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+            echo "    brew install miniforge"
+            echo "    conda init"
+            exit 1
+        fi
+
+        # Create conda environment
+        CONDA_ENV_NAME="clockify_rag"
+        info "Creating conda environment: $CONDA_ENV_NAME..."
+
+        # Check if environment already exists
+        if conda env list | grep -q "^$CONDA_ENV_NAME "; then
+            warning "Conda environment '$CONDA_ENV_NAME' already exists"
+            read -p "Recreate it? [y/N]: " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                conda env remove -n "$CONDA_ENV_NAME" -y
+                conda create -n "$CONDA_ENV_NAME" python=3.11 -y
+            fi
+        else
+            conda create -n "$CONDA_ENV_NAME" python=3.11 -y
+        fi
+        success "Conda environment created/verified"
+
+        # Activate conda environment
+        info "Activating conda environment..."
+        source "$(conda info --base)/etc/profile.d/conda.sh"
+        conda activate "$CONDA_ENV_NAME"
+        success "Conda environment activated"
+
+        # Install FAISS via conda-forge
+        info "Installing FAISS from conda-forge (native ARM64 build)..."
+        conda install -c conda-forge faiss-cpu=1.8.0 -y
+        success "FAISS installed"
+
+        # Install NumPy via conda
+        info "Installing NumPy via conda..."
+        conda install -c conda-forge numpy -y
+        success "NumPy installed"
+
+        # Install PyTorch with MPS support
+        info "Installing PyTorch with MPS GPU support..."
+        conda install -c pytorch pytorch -y
+        success "PyTorch installed"
+
+        # Install SentenceTransformers
+        info "Installing SentenceTransformers..."
+        conda install -c conda-forge sentence-transformers -y
+        success "SentenceTransformers installed"
+
+        # Upgrade pip
+        info "Upgrading pip..."
+        python -m pip install --upgrade pip -q
+        success "pip upgraded"
+
+        # Install via pip (FAISS already excluded from pyproject.toml, no --no-deps needed)
+        info "Installing remaining dependencies via pip..."
+        pip install -e .
+        success "Remaining dependencies installed"
+
+        echo ""
+        success "M1 Conda setup complete!"
+        echo ""
+        echo "To activate this environment in future sessions, run:"
+        echo "    conda activate $CONDA_ENV_NAME"
+        echo ""
+
+        # Exit after conda setup
         exit 0
+
+    elif [[ $REPLY == "2" ]]; then
+        # pip flow (not recommended)
+        warning "Using pip installation (not recommended for M1)..."
+        warning "FAISS may fail. If it does, re-run setup and choose conda instead."
+        echo ""
+
+    elif [[ $REPLY == "q" ]]; then
+        info "Setup cancelled."
+        exit 0
+    else
+        error "Invalid choice. Please run setup.sh again."
+        exit 1
     fi
-    warning "Continuing with pip... FAISS may fail to install on M1."
     echo ""
 fi
 
-# Step 6: Install dependencies
+# Step 6: Install dependencies (pip path)
 info "Installing dependencies (this may take a few minutes)..."
 if [ -f "requirements.lock" ]; then
     info "Installing from requirements.lock (pinned versions)..."
