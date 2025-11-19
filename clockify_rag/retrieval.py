@@ -469,8 +469,10 @@ def retrieve(
     question = validate_query_length(question)
 
     # Use centralized config value if not specified
+    requested_top_k = top_k
     if top_k is None:
         top_k = config.DEFAULT_TOP_K
+        logger.debug(f"top_k not specified, using DEFAULT_TOP_K={config.DEFAULT_TOP_K}")
 
     # Enforce hard ceiling to prevent context overflow (safety cap for user-supplied values)
     # This protects against accidental or malicious large requests that would blow up context
@@ -479,6 +481,8 @@ def retrieve(
             f"top_k={top_k} exceeds MAX_TOP_K={config.MAX_TOP_K}, clamping to MAX_TOP_K"
         )
         top_k = config.MAX_TOP_K
+
+    logger.debug(f"Retrieval config: requested_top_k={requested_top_k}, effective_top_k={top_k}, max_allowed={config.MAX_TOP_K}")
 
     # OPTIMIZATION: Classify query intent for specialized retrieval strategy (if enabled)
     intent_metadata = {}

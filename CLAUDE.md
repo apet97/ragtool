@@ -60,9 +60,9 @@ Response (answer with citations or "I don't know based on the MD.")
 **Configuration** (hardcoded in scripts, can be overridden via environment variables):
 - `CHUNK_SIZE = 1600` – Characters per chunk
 - `CHUNK_OVERLAP = 200` – Character overlap for oversized chunks
-- `DEFAULT_TOP_K = 12` (v2.0) – Chunks to retrieve before reranking
-- `DEFAULT_PACK_TOP = 6` (v2.0) – Final chunks to include in context
-- `DEFAULT_THRESHOLD = 0.30` (v2.0) – Minimum similarity score for acceptance
+- `DEFAULT_TOP_K = 15` (v2.0) – Chunks to retrieve before reranking
+- `DEFAULT_PACK_TOP = 8` (v2.0) – Final chunks to include in context
+- `DEFAULT_THRESHOLD = 0.25` (v2.0) – Minimum similarity score for acceptance
 
 ## Common Development Tasks
 
@@ -165,11 +165,11 @@ Run concurrent tests: `pytest tests/test_thread_safety.py -v -n 4`
 
 **v2.0 (Hybrid)**:
 1. Embed question with nomic-embed-text
-2. Retrieve top `DEFAULT_TOP_K` (12) via:
+2. Retrieve top `DEFAULT_TOP_K` (15) via:
    - **BM25**: Exact keyword matching (sparse)
    - **Dense**: Cosine similarity (semantic)
-3. Merge results, apply **MMR** (Maximal Marginal Relevance, lambda=0.7) to diversify
-4. Pack top `DEFAULT_PACK_TOP` (6) chunks if similarity ≥ `DEFAULT_THRESHOLD` (0.30)
+3. Merge results, apply **MMR** (Maximal Marginal Relevance, lambda=0.75) to diversify
+4. Pack top `DEFAULT_PACK_TOP` (8) chunks if similarity ≥ `DEFAULT_THRESHOLD` (0.25)
 5. Format snippets with ID, title, context
 6. Pass to LLM with system prompt requiring closed-book answers
 
@@ -239,11 +239,11 @@ SIMILARITY_THRESHOLD = 0.3 # Stricter = fewer false positives
 ```python
 CHUNK_CHARS = 1600         # Character limit per chunk
 CHUNK_OVERLAP = 200        # Overlap between sub-chunks
-DEFAULT_TOP_K = 12         # Retrieve before reranking
-DEFAULT_PACK_TOP = 6       # Final chunks in context
-DEFAULT_THRESHOLD = 0.30   # Minimum similarity
-MMR_LAMBDA = 0.7           # Diversity vs. relevance (0-1)
-CTX_TOKEN_BUDGET = 2800    # Context window budget
+DEFAULT_TOP_K = 15         # Retrieve before reranking
+DEFAULT_PACK_TOP = 8       # Final chunks in context
+DEFAULT_THRESHOLD = 0.25   # Minimum similarity
+MMR_LAMBDA = 0.75          # Diversity vs. relevance (0-1)
+CTX_TOKEN_BUDGET = 12000   # Context window budget (was 2800, now 12000)
 ```
 
 ## File Workflows

@@ -33,6 +33,8 @@ jobs:
           pip install -e .
 
       - name: Format check (black)
+        env:
+          ENVIRONMENT: ci  # Enforce production constraints
         run: black --check clockify_rag tests
 
       - name: Lint (ruff)
@@ -82,13 +84,19 @@ jobs:
           python -c "import sys; print(f'Python: {sys.version}')"
 
       - name: Run unit tests
+        env:
+          ENVIRONMENT: ci  # Enforce production constraints (fail-fast on missing langchain-ollama)
         run: pytest tests/ -v --tb=short -x --ignore=tests/test_integration.py --cov=clockify_rag --cov-report=term 2>&1 | head -100
 
       - name: Run integration tests (Ubuntu only)
         if: runner.os == 'Linux'
+        env:
+          ENVIRONMENT: ci  # Enforce production constraints
         run: pytest tests/test_integration.py -v --tb=short -x || true
 
       - name: Generate coverage report
+        env:
+          ENVIRONMENT: ci  # Enforce production constraints
         run: pytest tests/ --cov=clockify_rag --cov-report=xml --cov-report=term -q 2>&1 | tail -20
 
       - name: Upload coverage to Codecov
@@ -155,6 +163,8 @@ jobs:
           echo "✓ Test KB created"
 
       - name: Build index
+        env:
+          ENVIRONMENT: ci  # Enforce production constraints
         run: |
           python -m clockify_rag.cli_modern ingest --input test_kb.md 2>&1 | tail -10
           echo "✓ Index built"
