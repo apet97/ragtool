@@ -2,6 +2,22 @@
 # Optimized for Apple Silicon (ARM64) using conda
 
 # ==============================================================================
+# ⚠️  IMPORTANT: THIS IS NOT A PIP REQUIREMENTS FILE
+# ==============================================================================
+#
+# This file is a CONDA INSTALLATION GUIDE for Apple Silicon Macs only.
+# It is NOT compatible with `pip install -r requirements-m1.txt`.
+#
+# For pip/Poetry installation:
+#   - Use `poetry install` (recommended) or `pip install -e .`
+#   - Dependencies are defined in pyproject.toml
+#
+# For Apple Silicon with conda (this guide):
+#   - Follow the conda commands below
+#   - Specific versions listed here may differ from pyproject.toml ranges
+#   - This is intentional - conda packages use different version strategies
+#
+# ==============================================================================
 # INSTALLATION INSTRUCTIONS FOR M1/M2/M3 MACS
 # ==============================================================================
 #

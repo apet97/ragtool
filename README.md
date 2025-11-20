@@ -252,26 +252,6 @@ python3 clockify_support_cli_final.py --selftest
 - All POST calls use explicit (connect, read) timeouts
 - Policy guardrails for sensitive queries
 
-## DeepSeek Ollama Shim – Production Guidance
-
-The optional `deepseek_ollama_shim.py` exposes a minimal HTTP interface that is aimed at local development. Before enabling it in shared or production environments, review and apply the following controls:
-
-### Risks
-- ⚠️ **Unauthenticated access by default** – anyone who can reach the port can call the DeepSeek API with your key.
-- ⚠️ **Plain HTTP transport** – requests are unencrypted unless you add TLS or terminate it behind a reverse proxy.
-- ⚠️ **Limited rate limiting/auditing** – no built-in throttling or logging.
-
-### Hardening Checklist
-- Set `SHIM_AUTH_TOKEN` to require a `Bearer` token (or `X-Auth-Token`) header on every request.
-- Optionally configure `SHIM_ALLOW_IPS` with a comma-separated allowlist (e.g. `127.0.0.1,10.0.0.5`) to limit which clients can connect.
-- Run the shim on a loopback or firewalled interface (`SHIM_HOST=127.0.0.1` by default) and expose it externally only via a gateway that enforces your organization’s security policies.
-
-### Transport Security
-- Provide `SHIM_TLS_CERT` and `SHIM_TLS_KEY` to enable built-in TLS termination. The server will refuse connections if the presented certificate is invalid.
-- Alternatively, keep TLS and authentication in a hardened reverse proxy (e.g. Nginx, Caddy, Envoy) and run the shim behind it for additional observability and access controls.
-
-Document and monitor any deployments that expose the shim outside of a trusted network segment.
-
 ### Reliability 🛡️
 - urllib3 v1 and v2 compatible retry adapter
 - Manual bounded POST retry (max 1 retry, 0.5s backoff)

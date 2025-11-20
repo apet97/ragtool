@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import platform
+import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -151,22 +152,31 @@ def create_app() -> FastAPI:
     """Create and configure FastAPI application."""
 
     def _clear_index_state(target_app: FastAPI) -> None:
-        target_app.state.chunks = None
-        target_app.state.vecs_n = None
-        target_app.state.bm = None
-        target_app.state.hnsw = None
-        target_app.state.index_ready = False
+        """Clear index state with thread-safe locking."""
+        with target_app.state.lock:
+            target_app.state.chunks = None
+            target_app.state.vecs_n = None
+            target_app.state.bm = None
+            target_app.state.hnsw = None
+            target_app.state.index_ready = False
 
     def _set_index_state(target_app: FastAPI, result) -> None:
+        """Set index state with thread-safe locking to prevent race conditions."""
+        with target_app.state.lock:
+            if not result:
+                # Must release lock before calling _clear_index_state since it acquires same lock
+                pass
+            else:
+                chunks, vecs_n, bm, hnsw = result
+                target_app.state.chunks = chunks
+                target_app.state.vecs_n = vecs_n
+                target_app.state.bm = bm
+                target_app.state.hnsw = hnsw
+                target_app.state.index_ready = True
+
+        # Call clear outside lock if needed (RLock is reentrant so this is safe, but clearer)
         if not result:
             _clear_index_state(target_app)
-            return
-        chunks, vecs_n, bm, hnsw = result
-        target_app.state.chunks = chunks
-        target_app.state.vecs_n = vecs_n
-        target_app.state.bm = bm
-        target_app.state.hnsw = hnsw
-        target_app.state.index_ready = True
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -194,6 +204,10 @@ def create_app() -> FastAPI:
         version="5.9.1",
         lifespan=lifespan,
     )
+
+    # Initialize thread-safety lock on app.state (prevents race conditions during ingest)
+    # Using RLock for reentrant locking support
+    app.state.lock = threading.RLock()
 
     # Add CORS middleware if enabled
     if config.ALPHA_HYBRID is not None:  # Placeholder check
@@ -237,7 +251,10 @@ def create_app() -> FastAPI:
 
         # Check index files exist (belt-and-suspenders with app.state)
         index_files_exist = all(Path(f).exists() for f in ["chunks.jsonl", "vecs_n.npy", "meta.jsonl", "bm25.json"])
-        index_ready = app.state.index_ready and index_files_exist
+
+        # Read index_ready atomically
+        with app.state.lock:
+            index_ready = app.state.index_ready and index_files_exist
 
         # Check Ollama connectivity with short timeout (threadpool to avoid blocking)
         ollama_ok = False
@@ -311,8 +328,18 @@ def create_app() -> FastAPI:
         """
         _require_api_key(raw_request)
 
-        if not app.state.index_ready:
-            raise HTTPException(status_code=503, detail="Index not ready. Run /v1/ingest first or wait for startup.")
+        # Check index readiness and capture state atomically
+        with app.state.lock:
+            if not app.state.index_ready:
+                raise HTTPException(
+                    status_code=503, detail="Index not ready. Run /v1/ingest first or wait for startup."
+                )
+
+            # Capture state references atomically to prevent mid-query state changes
+            chunks = app.state.chunks
+            vecs_n = app.state.vecs_n
+            bm = app.state.bm
+            hnsw = app.state.hnsw
 
         try:
             start_time = time.time()
@@ -338,13 +365,13 @@ def create_app() -> FastAPI:
             answer_future = partial(
                 answer_once,
                 request.question,
-                app.state.chunks,
-                app.state.vecs_n,
-                app.state.bm,
+                chunks,
+                vecs_n,
+                bm,
                 top_k=request.top_k,
                 pack_top=request.pack_top,
                 threshold=request.threshold,
-                hnsw=app.state.hnsw,
+                hnsw=hnsw,
             )
             result = await loop.run_in_executor(None, answer_future)
 
@@ -443,8 +470,12 @@ def create_app() -> FastAPI:
         # Default JSON structure
         snapshot_json = collector.export_json(include_histograms=True)
         payload = json.loads(snapshot_json)
-        payload["index_ready"] = app.state.index_ready
-        payload["chunks_loaded"] = len(app.state.chunks) if app.state.chunks else 0
+
+        # Read state atomically
+        with app.state.lock:
+            payload["index_ready"] = app.state.index_ready
+            payload["chunks_loaded"] = len(app.state.chunks) if app.state.chunks else 0
+
         return JSONResponse(payload)
 
     return app
