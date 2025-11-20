@@ -269,4 +269,4 @@ jobs:
 
       - name: Verify dependencies in pyproject.toml
         run: |
-          python -c "import toml; pyproject = toml.load('pyproject.toml'); print(f'Dependencies: {len(pyproject[\"project\"][\"dependencies\"])}')"
+          python -c "import toml; pyproject = toml.load('pyproject.toml'); print(f'Dependencies: {len(pyproject[\"tool\"][\"poetry\"][\"dependencies\"])}')"

@@ -45,7 +45,7 @@ case "$MODE" in
         # Install core dependencies
         $PYTHON -m pip install numpy requests nltk rank-bm25
         # Install test tools
-        $PYTHON -m pip install pytest pytest-cov pytest-xdist
+        $PYTHON -m pip install pytest pytest-cov pytest-xdist pytest-asyncio asgi-lifespan
         # Install ML dependencies (without FAISS for speed)
         $PYTHON -m pip install sentence-transformers torch
         # Install remaining deps from requirements.txt (excluding heavy ones)
